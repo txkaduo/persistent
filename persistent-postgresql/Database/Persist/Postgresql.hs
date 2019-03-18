@@ -1157,6 +1157,16 @@ refName (DBName table) (DBName column) =
 
     where
 
+      -- Postgres automatically truncates too long identifiers to a combination of
+      -- truncatedTableName + "_" + truncatedColumnName + "_fkey"
+      -- This works fine for normal use cases, but it creates an issue for Persistent
+      -- Because after running the migrations, Persistent sees the truncated foreign key constraint
+      -- doesn't have the expected name, and suggests that you migrate again
+      -- To workaround this, we copy the Postgres truncation approach before sending foreign key constraints to it.
+      -- We could also truncate all identifiers with just T.take maximumIdentifierLength
+      -- But matching Postgres' algorithm gives a) better names b) compatibility with manual migrations.
+      --
+      -- I believe this will also be an issue for extremely long table names, but it's just much more likely to exist with foreign key constraints because they're usually tablename * 2 in length
       truncatedName :: Text
       truncatedName =
         let fixedCharactersLength = T.length $ T.concat ["_", "_fkey"]

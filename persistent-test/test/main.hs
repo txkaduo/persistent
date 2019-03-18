@@ -42,6 +42,12 @@ import qualified MigrationIdempotencyTest
 import qualified JSONTest
 #endif
 
+#ifndef WITH_MYSQL
+#ifndef WITH_NOSQL
+import qualified LongIdentifierTest
+#endif
+#endif
+
 
 #ifdef WITH_NOSQL
 #else
@@ -85,6 +91,11 @@ main = do
       , CustomPrimaryKeyReferenceTest.migration
       , MigrationColumnLengthTest.migration
       , TransactionLevelTest.migration
+#ifndef WITH_MYSQL
+#ifndef WITH_NOSQL
+      , LongIdentifierTest.longIdentifierMigrate
+#endif
+#endif
       ]
     PersistentTest.cleanDB
 #endif
@@ -118,4 +129,9 @@ main = do
 #endif
 #ifdef WITH_POSTGRESQL
     JSONTest.specs
+#endif
+#ifndef WITH_MYSQL
+#ifndef WITH_NOSQL
+    LongIdentifierTest.specs
+#endif
 #endif
