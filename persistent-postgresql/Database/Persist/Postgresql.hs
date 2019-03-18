@@ -10,6 +10,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE PatternGuards #-}
 
 -- | A postgresql backend for persistent.
 module Database.Persist.Postgresql
@@ -30,7 +31,7 @@ module Database.Persist.Postgresql
     , migrateEnableExtension
     ) where
 
-import Database.Persist.Sql
+import Database.Persist.Sql hiding (mkColumns)
 import qualified Database.Persist.Sql.Util as Util
 import Database.Persist.Sql.Types.Internal (mkPersistBackend)
 import Data.Fixed (Pico)
@@ -84,6 +85,8 @@ import Data.Monoid ((<>))
 import Data.Pool (Pool)
 import Data.Time (utc, localTimeToUTC)
 import Control.Exception (Exception, throwIO)
+import Data.Char (isSpace)
+import Database.Persist.Quasi (nullable)
 
 -- | A @libpq@ connection string.  A simple example of connection
 -- string would be @\"host=localhost port=5432 user=test
@@ -524,8 +527,8 @@ builtinGetters = I.fromList
         -- because the usual way of checking NULLs
         -- (c.f. withStmt') won't check for NULL inside
         -- arrays---or any other compound structure for that matter.
-        listOf f = convertPV (PersistList . map (nullable f) . PG.fromPGArray)
-          where nullable = maybe PersistNull
+        listOf f = convertPV (PersistList . map (maybeNullable f) . PG.fromPGArray)
+          where maybeNullable = maybe PersistNull
 
 getGetter :: PG.Connection -> PG.Oid -> Getter PersistValue
 getGetter _conn oid
@@ -635,6 +638,10 @@ data AlterColumn = ChangeType SqlType Text
                  | IsNull | NotNull | Add' Column | Drop SafeToRemove
                  | Default Text | NoDefault | Update' Text
                  | AddReference DBName [DBName] [Text] | DropReference DBName
+
+-- mkAddReference :: DBName [DBName] [Text]
+-- mkAddReference name tables columns = AddReference fkeyname t2 id2
+
 type AlterColumn' = (DBName, AlterColumn)
 
 data AlterTable = AddUniqueConstraint DBName [DBName]
@@ -1145,7 +1152,37 @@ instance PersistConfig PostgresConf where
 
 refName :: DBName -> DBName -> DBName
 refName (DBName table) (DBName column) =
-    DBName $ T.concat [table, "_", column, "_fkey"]
+    let idealName = T.concat [table, "_", column, "_fkey"]
+    in DBName (if T.length idealName <= maximumIdentifierLength then idealName else truncatedName)
+
+    where
+
+      truncatedName :: Text
+      truncatedName =
+        let fixedCharactersLength = T.length $ T.concat ["_", "_fkey"]
+            startingCharacterAmount = maximumIdentifierLength - fixedCharactersLength
+            (amount, remainder) = startingCharacterAmount `divMod` 2
+
+            tableLimit = amount + remainder
+            columnLimit = amount
+
+            tableLength = T.length table
+            columnLength = T.length column
+        in
+
+          let (truncatedTable, truncatedColumn) = if tableLength <= tableLimit then
+                let newColumnLimit = columnLimit + (tableLimit - tableLength)
+                in (table, T.take newColumnLimit column)
+                else if (columnLength <= columnLimit) then
+                  let newTableLimit = tableLimit + (columnLimit - columnLength)
+                  in (T.take newTableLimit table, column)
+                else (T.take tableLimit table, T.take columnLimit column)
+
+          in T.concat [truncatedTable, "_", truncatedColumn, "_fkey"]
+
+-- Postgres silently truncates identifiers above this length
+maximumIdentifierLength :: Int
+maximumIdentifierLength = 63
 
 udToPair :: UniqueDef -> (DBName, [DBName])
 udToPair ud = (uniqueDBName ud, map snd $ uniqueFields ud)
@@ -1268,3 +1305,58 @@ migrateEnableExtension extName = WriterT $ WriterT $ do
   if res == [Single 0]
     then return (((), []) , [(False, "CREATe EXTENSION \"" <> extName <> "\"")])
     else return (((), []), [])
+
+
+-- | Create the list of columns for the given entity.
+--
+-- This is copied from Database.Persist.Sql.Internal, but uses the custom Postgres refName function
+mkColumns :: [EntityDef] -> EntityDef -> ([Column], [UniqueDef], [ForeignDef])
+mkColumns allDefs t =
+    (cols, entityUniques t, entityForeigns t)
+  where
+    cols :: [Column]
+    cols = map go (entityFields t)
+
+    tn :: DBName
+    tn = entityDB t
+
+    go :: FieldDef -> Column
+    go fd =
+        Column
+            (fieldDB fd)
+            (nullable (fieldAttrs fd) /= NotNullable || entitySum t)
+            (fieldSqlType fd)
+            (defaultAttribute $ fieldAttrs fd)
+            Nothing
+            (maxLen $ fieldAttrs fd)
+            (ref (fieldDB fd) (fieldReference fd) (fieldAttrs fd))
+
+    maxLen :: [Attr] -> Maybe Integer
+    maxLen [] = Nothing
+    maxLen (a:as)
+        | Just d <- T.stripPrefix "maxlen=" a =
+            case reads (T.unpack d) of
+              [(i, s)] | all isSpace s -> Just i
+              _ -> error $ "Could not parse maxlen field with value " ++
+                           show d ++ " on " ++ show tn
+        | otherwise = maxLen as
+
+    ref :: DBName
+        -> ReferenceDef
+        -> [Attr]
+        -> Maybe (DBName, DBName) -- table name, constraint name
+    ref c fe []
+        | ForeignRef f _ <- fe =
+            Just (resolveTableName allDefs f, refName tn c)
+        | otherwise = Nothing
+    ref _ _ ("noreference":_) = Nothing
+    ref c _ (a:_)
+        | Just x <- T.stripPrefix "reference=" a =
+            Just (DBName x, refName tn c)
+    ref c x (_:as) = ref c x as
+
+resolveTableName :: [EntityDef] -> HaskellName -> DBName
+resolveTableName [] (HaskellName hn) = error $ "Table not found: " ++ T.unpack hn
+resolveTableName (e:es) hn
+    | entityHaskell e == hn = entityDB e
+    | otherwise = resolveTableName es hn

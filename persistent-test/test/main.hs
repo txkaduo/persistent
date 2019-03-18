@@ -24,13 +24,14 @@ import qualified UniqueTest
 import qualified MigrationColumnLengthTest
 import qualified EquivalentTypeTest
 import qualified TransactionLevelTest
+import qualified MigrationTest
 
 #ifndef WITH_NOSQL
 #  ifdef WITH_SQLITE
 import Control.Exception (handle, IOException)
 import Filesystem (removeFile)
 import Filesystem.Path.CurrentOS (fromText)
-import qualified MigrationTest
+
 #  endif
 #endif
 
@@ -70,9 +71,7 @@ main = do
       , MaxLenTest.maxlenMigrate
       , Recursive.recursiveMigrate
       , CompositeTest.compositeMigrate
-#  ifdef WITH_SQLITE
       , MigrationTest.migrationMigrate
-#  endif
       , PersistUniqueTest.migration
       , RenameTest.migration
       , CustomPersistFieldTest.customFieldMigrate
@@ -113,10 +112,7 @@ main = do
     MigrationColumnLengthTest.specs
     EquivalentTypeTest.specs
     TransactionLevelTest.specs
-
-#ifdef WITH_SQLITE
     MigrationTest.specs
-#endif
 #ifdef WITH_MYSQL
     MigrationIdempotencyTest.specs
 #endif
