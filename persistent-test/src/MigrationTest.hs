@@ -30,11 +30,6 @@ Target
 Source
     field3 Int
     field4 TargetId
-
-AnExtremelyFantasticallySuperLongNameParent
-    field1 Int
-AnExtremelyFantasticallySuperLongNameChild
-    anExtremelyFantasticallySuperLongNameParentId AnExtremelyFantasticallySuperLongNameParentId
 |]
 
 #ifdef WITH_NOSQL
@@ -52,11 +47,6 @@ Source1 sql=source
     field3 Int
     extra  Int
     field4 Target1Id
-
-AnExtremelyFantasticallySuperLongNameParent1 sql=an_extremely_fantastically_super_long_name_parent
-    field1 Int
-AnExtremelyFantasticallySuperLongNameChild1 sql=an_extremely_fantastically_super_long_name_child
-    anExtremelyFantasticallySuperLongNameParentId AnExtremelyFantasticallySuperLongNameParent1Id
 |]
 
 #ifndef WITH_NOSQL

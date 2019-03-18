@@ -12,7 +12,6 @@
 module LongIdentifierTest where
 
 import Database.Persist.TH
-import qualified Data.Text as T
 import Init
 
 -- This test is designed to create very long identifier names
