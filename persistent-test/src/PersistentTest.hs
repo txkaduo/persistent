@@ -120,7 +120,7 @@ specsWith runDb = describe "persistent" $ do
       results' <- selectList [PersonAge <. 28] []
       results' @== [Entity micK mic26]
 
-      p28 <- updateGet micK [PersonAge =. 28]
+      Just p28 <- updateGet micK [PersonAge =. 28]
       personAge p28 @== 28
 
       updateWhere [PersonName ==. "Michael"] [PersonAge =. 29]
@@ -329,9 +329,9 @@ specsWith runDb = describe "persistent" $ do
   it "updateGet" $ runDb $ do
       let p25 = Person "Michael" 25 Nothing
       key25 <- insert p25
-      pBlue28 <- updateGet key25 [PersonAge =. 28, PersonName =. "Updated"]
+      Just pBlue28 <- updateGet key25 [PersonAge =. 28, PersonName =. "Updated"]
       pBlue28 @== Person "Updated" 28 Nothing
-      pBlue30 <- updateGet key25 [PersonAge +=. 2]
+      Just pBlue30 <- updateGet key25 [PersonAge +=. 2]
       pBlue30 @== Person "Updated" 30 Nothing
 
   describe "repsertMany" $ do

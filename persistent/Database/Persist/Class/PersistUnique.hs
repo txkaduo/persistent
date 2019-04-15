@@ -21,8 +21,9 @@ module Database.Persist.Class.PersistUnique
   )
   where
 
+import Control.Exception (throwIO)
 import Control.Monad (liftM)
-import Control.Monad.IO.Class (MonadIO)
+import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Trans.Reader (ReaderT)
 import Data.Function (on)
 import Data.List ((\\), deleteFirstsBy)
@@ -268,8 +269,16 @@ class (PersistUniqueRead backend, PersistStoreWrite backend) =>
         mrecord <- getBy uniqueKey
         maybe (insertEntity record) (`updateGetEntity` updates) mrecord
       where
-        updateGetEntity (Entity k _) upds =
-            (Entity k) `liftM` (updateGet k upds)
+        updateGetEntity (Entity k _) upds = do
+            -- (Entity k) `liftM` (updateGet k upds)
+            mval <- updateGet k upds
+            case mval of
+                Nothing ->
+                    -- This is safe, because we are calling this in the
+                    -- Just case if the record exists.
+                    liftIO $ throwIO $ KeyNotFound $ show k
+                Just val -> pure (Entity k val)
+
 
     -- | Put many records into db
     --

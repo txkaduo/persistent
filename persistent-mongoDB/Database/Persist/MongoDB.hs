@@ -560,8 +560,8 @@ instance PersistStoreWrite DB.MongoContext where
       where
         instantiate doc = do
             Entity _ rec <- fromPersistValuesThrow t doc
-            return rec
-        err msg = Trans.liftIO $ throwIO $ KeyNotFound $ show key ++ msg
+            return (Just rec)
+        err _ = pure Nothing
         t = entityDefFromKey key
 
 instance PersistStoreRead DB.MongoContext where

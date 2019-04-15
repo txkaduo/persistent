@@ -381,12 +381,12 @@ specs = describe "embedded entities" $ do
             con = Contact 123456 "foo@bar.com"
         uid <- insert usr
         let newName = "fstN2"
-        usr1 <- updateGet uid [UserProfile &->. ProfileFirstName `nestSet` newName]
+        Just usr1 <- updateGet uid [UserProfile &->. ProfileFirstName `nestSet` newName]
         (profileFirstName $ userProfile usr1) @== newName
 
         let newEmail = "foo@example.com"
         let newIdent = "bar"
-        usr2 <- updateGet uid [UserProfile &~>. ProfileContact ?&->. ContactEmail `nestSet` newEmail, UserIdent =. newIdent]
+        Just usr2 <- updateGet uid [UserProfile &~>. ProfileContact ?&->. ContactEmail `nestSet` newEmail, UserIdent =. newIdent]
         (userIdent usr2) @== newIdent
         (fmap contactEmail . profileContact . userProfile $ usr2) @== Just newEmail
 
@@ -399,25 +399,25 @@ specs = describe "embedded entities" $ do
         contk <- insert container
         let _contEnt = Entity contk container
 
-        pushed <- updateGet contk [HasListEmbedList `push` HasEmbed "embed" (OnlyName "3")]
+        Just pushed <- updateGet contk [HasListEmbedList `push` HasEmbed "embed" (OnlyName "3")]
         (Prelude.map (onlyNameName . hasEmbedEmbed) $ hasListEmbedList pushed) @== ["1","2","3"]
 
         -- same, don't add anything
-        addedToSet <- updateGet contk [HasListEmbedList `addToSet` HasEmbed "embed" (OnlyName "3")]
+        Just addedToSet <- updateGet contk [HasListEmbedList `addToSet` HasEmbed "embed" (OnlyName "3")]
         (Prelude.map (onlyNameName . hasEmbedEmbed) $ hasListEmbedList addedToSet) @== ["1","2","3"]
-        pulled <- updateGet contk [HasListEmbedList `pull` HasEmbed "embed" (OnlyName "3")]
+        Just pulled <- updateGet contk [HasListEmbedList `pull` HasEmbed "embed" (OnlyName "3")]
         (Prelude.map (onlyNameName . hasEmbedEmbed) $ hasListEmbedList pulled) @== ["1","2"]
 
         -- now it is new
-        addedToSet2 <- updateGet contk [HasListEmbedList `addToSet` HasEmbed "embed" (OnlyName "3")]
+        Just addedToSet2 <- updateGet contk [HasListEmbedList `addToSet` HasEmbed "embed" (OnlyName "3")]
         (Prelude.map (onlyNameName . hasEmbedEmbed) $ hasListEmbedList addedToSet2) @== ["1","2","3"]
 
-        allPulled <- updateGet contk [eachOp pull HasListEmbedList
+        Just allPulled <- updateGet contk [eachOp pull HasListEmbedList
           [ HasEmbed "embed" (OnlyName "3")
           , HasEmbed "embed" (OnlyName "2")
           ] ]
         (Prelude.map (onlyNameName . hasEmbedEmbed) $ hasListEmbedList allPulled) @== ["1"]
-        allPushed <- updateGet contk [eachOp push HasListEmbedList
+        Just allPushed <- updateGet contk [eachOp push HasListEmbedList
           [ HasEmbed "embed" (OnlyName "4")
           , HasEmbed "embed" (OnlyName "5")
           ] ]

@@ -136,7 +136,7 @@ specsWith runDb handleNull handleKey = describe "UpsertTests" $ do
   it "maybe update" $ runDb $ do
       let noAge = PersonMaybeAge "Michael" Nothing
       keyNoAge <- insert noAge
-      noAge2 <- updateGet keyNoAge [PersonMaybeAgeAge +=. Just 2]
+      Just noAge2 <- updateGet keyNoAge [PersonMaybeAgeAge +=. Just 2]
       -- the correct answer depends on the backend. MongoDB assumes
       -- a 'Nothing' value is 0, and does @0 + 2@ for @Just 2@. In a SQL
       -- database, @NULL@ annihilates, so @NULL + 2 = NULL@.

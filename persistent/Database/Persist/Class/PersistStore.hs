@@ -529,9 +529,6 @@ class
     -- | Update individual fields on a specific record, and retrieve the
     -- updated value from the database.
     --
-    -- Note that this function will throw an exception if the given key is not
-    -- found in the database.
-    --
     -- === __Example usage__
     --
     -- With <#schema-persist-store-1 schema-1> and <#dataset-persist-store-1 dataset-1>,
@@ -550,11 +547,12 @@ class
     -- > +-----+------+-----+
     -- > |2    |Simon |41   |
     -- > +-----+------+-----+
-    updateGet :: (MonadIO m, PersistRecordBackend record backend)
-              => Key record -> [Update record] -> ReaderT backend m record
+    updateGet
+        :: (MonadIO m, PersistRecordBackend record backend)
+        => Key record -> [Update record] -> ReaderT backend m (Maybe record)
     updateGet key ups = do
         update key ups
-        get key >>= maybe (liftIO $ throwIO $ KeyNotFound $ show key) return
+        get key
 
 
 -- | Same as 'get', but for a non-null (not Maybe) foreign key.
