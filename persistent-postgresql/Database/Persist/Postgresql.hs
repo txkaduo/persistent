@@ -455,6 +455,12 @@ type Getter a = PGFF.FieldParser a
 convertPV :: PGFF.FromField a => (a -> b) -> Getter b
 convertPV f = (fmap f .) . PGFF.fromField
 
+convertUnboundedPV :: PGFF.FromField a => (a -> PersistValue) -> Getter PersistValue
+convertUnboundedPV f field mdata = do
+  case mdata of
+    Just bs | bs `elem` [ "infinity", "-infinity" ] -> pure (PersistText $ T.pack $ B8.unpack bs)
+    _                                               -> convertPV f field mdata
+
 builtinGetters :: I.IntMap (Getter PersistValue)
 builtinGetters = I.fromList
     [ (k PS.bool,        convertPV PersistBool)
@@ -471,10 +477,10 @@ builtinGetters = I.fromList
     , (k PS.money,       convertPV PersistRational)
     , (k PS.bpchar,      convertPV PersistText)
     , (k PS.varchar,     convertPV PersistText)
-    , (k PS.date,        convertPV PersistDay)
+    , (k PS.date,        convertUnboundedPV PersistDay)
     , (k PS.time,        convertPV PersistTimeOfDay)
-    , (k PS.timestamp,   convertPV (PersistUTCTime. localTimeToUTC utc))
-    , (k PS.timestamptz, convertPV PersistUTCTime)
+    , (k PS.timestamp,   convertUnboundedPV (PersistUTCTime. localTimeToUTC utc))
+    , (k PS.timestamptz, convertUnboundedPV PersistUTCTime)
     , (k PS.bit,         convertPV PersistInt64)
     , (k PS.varbit,      convertPV PersistInt64)
     , (k PS.numeric,     convertPV PersistRational)
