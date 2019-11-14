@@ -20,6 +20,7 @@ module Database.Persist.TH
     , persistManyFileWith
       -- * Turn @EntityDef@s into types
     , mkPersist
+    , mkPersistExt
     , MkPersistSettings
     , mpsBackend
     , mpsGeneric
@@ -395,6 +396,19 @@ mkPersist mps ents' = do
   where
     ents = map fixEntityDef ents'
     entityMap = constructEntityMap ents
+
+
+mkPersistExt :: MkPersistSettings -> [EntityDef] -> [EntityDef] -> Q [Dec]
+mkPersistExt mps other_ents' ents' = do
+    x <- fmap Data.Monoid.mconcat $ mapM (persistFieldFromEntity mps) ents
+    y <- fmap mconcat $ mapM (mkEntity entityMap mps) ents
+    z <- fmap mconcat $ mapM (mkJSON mps) ents
+    uniqueKeyInstances <- fmap mconcat $ mapM (mkUniqueKeyInstances mps) ents
+    return $ mconcat [x, y, z, uniqueKeyInstances]
+  where
+    ents = map fixEntityDef ents'
+    other_ents = map fixEntityDef other_ents'
+    entityMap = constructEntityMap (ents <> other_ents)
 
 -- | Implement special preprocessing on EntityDef as necessary for 'mkPersist'.
 -- For example, strip out any fields marked as MigrationOnly.
