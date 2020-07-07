@@ -1,5 +1,17 @@
 # Changelog for persistent-postgresql
 
+## 2.10.1.2
+
+* Fix issue with multiple foreign keys on single column. [#1010](https://github.com/yesodweb/persistent/pull/1010)
+
+## 2.10.1.1
+
+* Compatibility with latest persistent-template for test suite [#1002](https://github.com/yesodweb/persistent/pull/1002/files)
+
+## 2.10.1
+
+* Added support for the `constraint=` attribute to the Postgresql backend. [#979](https://github.com/yesodweb/persistent/pull/979)
+
 ## 2.10.0
 
 * Added question mark operators (`(?.), (?|.), (?&.)`) to `Database.Persist.Postgresql.JSON` [#863](https://github.com/yesodweb/persistent/pull/863)

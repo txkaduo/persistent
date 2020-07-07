@@ -560,7 +560,7 @@ migrate' :: [EntityDef]
          -> EntityDef
          -> IO (Either [Text] [(Bool, Text)])
 migrate' allDefs getter entity = fmap (fmap $ map showAlterDb) $ do
-    old <- getColumns getter entity
+    old <- getColumns getter entity newcols'
     case partitionEithers old of
         ([], old'') -> do
             exists <-
@@ -571,18 +571,25 @@ migrate' allDefs getter entity = fmap (fmap $ map showAlterDb) $ do
         (errs, _) -> return $ Left errs
   where
     name = entityDB entity
+    (newcols', udefs, fdefs) = mkColumns allDefs entity
     migrationText exists old'' =
         if not exists
             then createText newcols fdefs udspair
-            else let (acs, ats) = getAlters allDefs entity (newcols, udspair) old'
+            else let (acs, ats) = getAlters allDefs entity (newcols, udspair) $ excludeForeignKeys $ old'
                      acs' = map (AlterColumn name) acs
                      ats' = map (AlterTable name) ats
                  in  acs' ++ ats'
        where
          old' = partitionEithers old''
-         (newcols', udefs, fdefs) = mkColumns allDefs entity
          newcols = filter (not . safeToRemove entity . cName) newcols'
          udspair = map udToPair udefs
+         excludeForeignKeys (xs,ys) = (map excludeForeignKey xs,ys)
+         excludeForeignKey c = case cReference c of
+           Just (_,fk) ->
+             case find (\f -> fk == foreignConstraintNameDBName f) fdefs of
+               Just _ -> c { cReference = Nothing }
+               Nothing -> c
+           Nothing -> c
             -- Check for table existence if there are no columns, workaround
             -- for https://github.com/yesodweb/persistent/issues/152
 
@@ -649,9 +656,9 @@ data AlterDB = AddTable Text
 
 -- | Returns all of the columns in the given table currently in the database.
 getColumns :: (Text -> IO Statement)
-           -> EntityDef
+           -> EntityDef -> [Column]
            -> IO [Either Text (Either Column (DBName, [DBName]))]
-getColumns getter def = do
+getColumns getter def cols = do
     let sqlv=T.concat ["SELECT "
                           ,"column_name "
                           ,",is_nullable "
@@ -699,6 +706,10 @@ getColumns getter def = do
     us <- with (stmtQuery stmt' vals) (\src -> runConduit $ src .| helperU)
     return $ cs ++ us
   where
+    refMap = Map.fromList $ foldl ref [] cols
+        where ref rs c = case cReference c of
+                  Nothing -> rs
+                  (Just r) -> (unDBName $ cName c, r) : rs
     getAll front = do
         x <- CL.head
         case x of
@@ -714,8 +725,8 @@ getColumns getter def = do
         x <- CL.head
         case x of
             Nothing -> return []
-            Just x' -> do
-                col <- liftIO $ getColumn getter (entityDB def) x'
+            Just x'@((PersistText cname):_) -> do
+                col <- liftIO $ getColumn getter (entityDB def) x' (Map.lookup cname refMap)
                 let col' = case col of
                             Left e -> Left e
                             Right c -> Right $ Left c
@@ -763,8 +774,9 @@ getAlters defs def (c1, u1) (c2, u2) =
 
 getColumn :: (Text -> IO Statement)
           -> DBName -> [PersistValue]
+          -> Maybe (DBName, DBName) 
           -> IO (Either Text Column)
-getColumn getter tableName' [PersistText columnName, PersistText isNullable, PersistText typeName, defaultValue, numericPrecision, numericScale, maxlen] =
+getColumn getter tableName' [PersistText columnName, PersistText isNullable, PersistText typeName, defaultValue, numericPrecision, numericScale, maxlen] refName =
     case d' of
         Left s -> return $ Left s
         Right d'' ->
@@ -775,7 +787,7 @@ getColumn getter tableName' [PersistText columnName, PersistText isNullable, Per
                   Left s -> return $ Left s
                   Right t -> do
                       let cname = DBName columnName
-                      ref <- getRef cname
+                      ref <- getRef cname refName
                       return $ Right Column
                           { cName = cname
                           , cNull = isNullable == "YES"
@@ -797,24 +809,39 @@ getColumn getter tableName' [PersistText columnName, PersistText isNullable, Per
             case T.stripSuffix p t of
                 Nothing -> loop' ps
                 Just t' -> t'
-    getRef cname = do
-        let sql = T.concat
-                [ "SELECT COUNT(*) FROM "
-                , "information_schema.table_constraints "
-                , "WHERE table_catalog=current_database() "
-                , "AND table_schema=current_schema() "
-                , "AND table_name=? "
-                , "AND constraint_type='FOREIGN KEY' "
-                , "AND constraint_name=?"
-                ]
-        let ref = refName tableName' cname
+    getRef _ Nothing = return Nothing
+    getRef cname (Just (_, refName')) = do
+        let sql = T.concat ["SELECT DISTINCT "
+                           ,"ccu.table_name, "
+                           ,"tc.constraint_name "
+                           ,"FROM information_schema.constraint_column_usage ccu, "
+                           ,"information_schema.key_column_usage kcu, "
+                           ,"information_schema.table_constraints tc "
+                           ,"WHERE tc.constraint_type='FOREIGN KEY' "
+                           ,"AND kcu.constraint_name=tc.constraint_name "
+                           ,"AND ccu.constraint_name=kcu.constraint_name "
+                           ,"AND kcu.ordinal_position=1 "
+                           ,"AND kcu.table_name=? "
+                           ,"AND kcu.column_name=? "
+                           ,"AND tc.constraint_name=?"]
         stmt <- getter sql
-        with (stmtQuery stmt
-                     [ PersistText $ unDBName tableName'
-                     , PersistText $ unDBName ref
-                     ]) (\src -> runConduit $ src .| do
-            Just [PersistInt64 i] <- CL.head
-            return $ if i == 0 then Nothing else Just (DBName "", ref))
+        cntrs <- with (stmtQuery stmt [PersistText $ unDBName tableName'
+                                      ,PersistText $ unDBName cname
+                                      ,PersistText $ unDBName refName'])
+                      (\src -> runConduit $ src .| CL.consume)
+        case cntrs of
+          [] -> return Nothing
+          [[PersistText table, PersistText constraint]] ->
+            return $ Just (DBName table, DBName constraint)
+          xs ->
+            error $ mconcat
+              [ "Postgresql.getColumn: error fetching constraints. Expected a single result for foreign key query for table: "
+              , T.unpack (unDBName tableName')
+              , " and column: "
+              , T.unpack (unDBName cname)
+              , " but got: "
+              , show xs
+              ]
     d' = case defaultValue of
             PersistNull   -> Right Nothing
             PersistText t -> Right $ Just t
@@ -856,7 +883,7 @@ getColumn getter tableName' [PersistText columnName, PersistText isNullable, Per
       , ", respectively."
       , " Specify the values as numeric(total_digits, digits_after_decimal_place)."
       ]
-getColumn _ _ columnName =
+getColumn _ _ columnName _ =
     return $ Left $ T.pack $ "Invalid result from information_schema: " ++ show columnName
 
 -- | Intelligent comparison of SQL types, to account for SqlInt32 vs SqlOther integer
@@ -914,7 +941,7 @@ getAddReference :: [EntityDef] -> DBName -> DBName -> DBName -> Maybe (DBName, D
 getAddReference allDefs table reftable cname ref =
     case ref of
         Nothing -> Nothing
-        Just (s, _) -> Just $ AlterColumn table (s, AddReference (refName table cname) [cname] id_)
+        Just (s, constraintName) -> Just $ AlterColumn table (s, AddReference constraintName [cname] id_)
                           where
                             id_ = fromMaybe (error $ "Could not find ID of entity " ++ show reftable)
                                         $ do
@@ -1145,10 +1172,6 @@ instance PersistConfig PostgresConf where
         addUser     = maybeAddParam "user"     "PGUSER"
         addPass     = maybeAddParam "password" "PGPASS"
         addDatabase = maybeAddParam "dbname"   "PGDATABASE"
-
-refName :: DBName -> DBName -> DBName
-refName (DBName table) (DBName column) =
-    DBName $ T.concat [table, "_", column, "_fkey"]
 
 udToPair :: UniqueDef -> (DBName, [DBName])
 udToPair ud = (uniqueDBName ud, map snd $ uniqueFields ud)

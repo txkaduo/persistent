@@ -5,6 +5,9 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 import PgInit
@@ -46,6 +49,7 @@ import qualified TransactionLevelTest
 import qualified TreeTest
 import qualified UniqueTest
 import qualified UpsertTest
+import qualified CustomConstraintTest
 
 type Tuple = (,)
 
@@ -98,6 +102,7 @@ main = do
     mapM_ setup
       [ PersistentTest.testMigrate
       , PersistentTest.noPrefixMigrate
+      , PersistentTest.treeMigrate
       , EmbedTest.embedMigrate
       , EmbedOrderTest.embedOrderMigrate
       , LargeNumberTest.numberMigrate
@@ -172,5 +177,6 @@ main = do
     EquivalentTypeTestPostgres.specs
     TransactionLevelTest.specsWith db
     JSONTest.specs
+    CustomConstraintTest.specs db
     -- FIXME: not used, probably should?
     -- ArrayAggTest.specs db
