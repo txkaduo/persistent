@@ -1,10 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE RecordWildCards, UndecidableInstances #-}
+
 module PersistentTest
     ( module PersistentTest
     , cleanDB
     , testMigrate
     , noPrefixMigrate
+    , customPrefixMigrate
     , treeMigrate
     ) where
 
@@ -12,7 +14,6 @@ import Control.Monad.Fail
 import Control.Monad.IO.Class
 import Data.Aeson
 import Data.Conduit
-import qualified Data.Text as T
 import qualified Data.Conduit.List as CL
 import Data.Functor.Constant
 import Data.Functor.Identity
@@ -26,7 +27,6 @@ import Web.PathPieces (PathPiece (..))
 import Data.Proxy (Proxy(..))
 
 import Database.Persist
-import Database.Persist.Quasi
 import Init
 import PersistentTestModels
 import PersistTestPetType
@@ -46,12 +46,12 @@ filterOrSpecs
 filterOrSpecs runDb = describe "FilterOr" $ do
             it "FilterOr []" $ runDb $ do
                 let p = Person "z" 1 Nothing
-                _ <- insert p
+                insert_ p
                 ps <- selectList [FilterOr []] [Desc PersonAge]
                 assertEmpty ps
             it "||. []" $ runDb $ do
                 let p = Person "z" 1 Nothing
-                _ <- insert p
+                insert_ p
                 c <- count $ [PersonName ==. "a"] ||. []
                 c @== (1::Int)
 
@@ -60,7 +60,7 @@ _polymorphic :: (MonadFail m, MonadIO m, PersistQuery backend, BaseBackend backe
 _polymorphic = do
     ((Entity id' _):_) <- selectList [] [LimitTo 1]
     _ <- selectList [PetOwnerId ==. id'] []
-    _ <- insert $ Pet id' "foo" Cat
+    insert_ $ Pet id' "foo" Cat
     return ()
 
 -- Some lens stuff
@@ -84,7 +84,7 @@ specsWith runDb = describe "persistent" $ do
 
   it "FilterAnd []" $ runDb $ do
       let p = Person "z" 1 Nothing
-      _ <- insert p
+      insert_ p
       ps <- selectList [FilterAnd []] [Desc PersonAge]
       assertNotEmpty ps
 
@@ -137,13 +137,21 @@ specsWith runDb = describe "persistent" $ do
       Just mic29 <- get micK
       personAge mic29 @== 29
 
+      let louis = Person "Louis" 55 $ Just "brown"
+      ex0 <- exists [PersonName ==. "Louis"]
+      ex0 @== False
+      louisK <- insert louis
+      ex1 <- exists [PersonName ==. "Louis"]
+      ex1 @== True
+      delete louisK
+
       let eli = Person "Eliezer" 2 $ Just "blue"
-      _ <- insert eli
+      insert_ eli
       pasc <- selectList [] [Asc PersonAge]
       map entityVal pasc @== [eli, mic29]
 
       let abe30 = Person "Abe" 30 $ Just "black"
-      _ <- insert abe30
+      insert_ abe30
       -- pdesc <- selectList [PersonAge <. 30] [Desc PersonName]
       map entityVal pasc @== [eli, mic29]
 
@@ -177,9 +185,9 @@ specsWith runDb = describe "persistent" $ do
   it "!=." $ runDb $ do
       deleteWhere ([] :: [Filter (PersonGeneric backend)])
       let mic = Person "Michael" 25 Nothing
-      _ <- insert mic
+      insert_ mic
       let eli = Person "Eliezer" 25 (Just "Red")
-      _ <- insert eli
+      insert_ eli
 
       pne <- selectList [PersonName !=. "Michael"] []
       map entityVal pne @== [eli]
@@ -194,9 +202,9 @@ specsWith runDb = describe "persistent" $ do
   it "Double Maybe" $ runDb $ do
       deleteWhere ([] :: [Filter (PersonMayGeneric backend)])
       let mic = PersonMay (Just "Michael") Nothing
-      _ <- insert mic
+      insert_ mic
       let eli = PersonMay (Just "Eliezer") (Just "Red")
-      _ <- insert eli
+      insert_ eli
       pe <- selectList [PersonMayName ==. Nothing, PersonMayColor ==. Nothing] []
       map entityVal pe @== []
       pne <- selectList [PersonMayName !=. Nothing, PersonMayColor !=. Nothing] []
@@ -256,7 +264,7 @@ specsWith runDb = describe "persistent" $ do
 
 
   it "deleteBy" $ runDb $ do
-      _ <- insert $ Person "Michael2" 27 Nothing
+      insert_ $ Person "Michael2" 27 Nothing
       let p3 = Person "Michael3" 27 Nothing
       key3 <- insert p3
 
@@ -435,7 +443,7 @@ specsWith runDb = describe "persistent" $ do
           e4 @== Nothing
 
   it "selectFirst" $ runDb $ do
-      _ <- insert $ Person "Michael" 26 Nothing
+      insert_ $ Person "Michael" 26 Nothing
       let pOld = Person "Oldie" 75 Nothing
       kOld <- insert pOld
 
@@ -575,7 +583,7 @@ specsWith runDb = describe "persistent" $ do
           p2 = Person "E" 1 Nothing
           p3 = Person "F" 2 Nothing
       pid1 <- insert p1
-      _ <- insert p2
+      insert_ p2
       pid3 <- insert p3
       x <- selectList [PersonId <-. [pid1, pid3]] []
       liftIO $ x @?= [Entity pid1 p1, Entity pid3 p3]
@@ -628,7 +636,76 @@ specsWith runDb = describe "persistent" $ do
         `shouldBe`
           Just "This is a doc comment for a relationship.\nYou need to put the pipe character for each line of documentation.\nBut you can resume the doc comments afterwards.\n"
     it "provides comments on the field" $ do
-      let [nameField, parentField] = entityFields edef
+      let [nameField, _] = entityFields edef
       fieldComments nameField
         `shouldBe`
           Just "Fields should be documentable.\n"
+
+  describe "JsonEncoding" $ do
+    let
+      subject =
+        JsonEncoding "Bob" 32
+      subjectEntity =
+        Entity (JsonEncodingKey (jsonEncodingName subject)) subject
+
+    it "encodes without an ID field" $ do
+      toJSON subjectEntity
+        `shouldBe`
+          Object (M.fromList
+            [ ("name", String "Bob")
+            , ("age", toJSON (32 :: Int))
+            , ("id", String "Bob")
+            ])
+
+    it "decodes without an ID field" $ do
+      let
+        json_ = encode . Object . M.fromList $
+          [ ("name", String "Bob")
+          , ("age", toJSON (32 :: Int))
+          ]
+      decode json_
+        `shouldBe`
+          Just subjectEntity
+
+    prop "works with a Primary" $ \jsonEncoding -> do
+      let
+        ent =
+          Entity (JsonEncodingKey (jsonEncodingName jsonEncoding)) jsonEncoding
+      decode (encode ent)
+        `shouldBe`
+          Just ent
+
+    prop "excuse me what" $ \j@JsonEncoding{..} -> do
+      let
+        ent =
+          Entity (JsonEncodingKey jsonEncodingName) j
+      toJSON ent
+        `shouldBe`
+          Object (M.fromList
+            [ ("name", toJSON jsonEncodingName)
+            , ("age", toJSON jsonEncodingAge)
+            , ("id", toJSON jsonEncodingName)
+            ])
+
+    prop "round trip works with composite key" $ \j@JsonEncoding2{..} -> do
+      let
+        key = JsonEncoding2Key jsonEncoding2Name jsonEncoding2Blood
+        ent =
+          Entity key j
+      decode (encode ent)
+        `shouldBe`
+          Just ent
+
+    prop "works with a composite key" $ \j@JsonEncoding2{..} -> do
+      let
+        key = JsonEncoding2Key jsonEncoding2Name jsonEncoding2Blood
+        ent =
+          Entity key j
+      toJSON ent
+        `shouldBe`
+          Object (M.fromList
+            [ ("name", toJSON jsonEncoding2Name)
+            , ("age", toJSON jsonEncoding2Age)
+            , ("blood", toJSON jsonEncoding2Blood)
+            , ("id", toJSON key)
+            ])

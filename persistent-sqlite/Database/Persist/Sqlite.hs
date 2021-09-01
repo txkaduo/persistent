@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
@@ -35,6 +36,8 @@ module Database.Persist.Sqlite
     , mockMigration
     , retryOnBusy
     , waitForDatabase
+    , ForeignKeyViolation(..)
+    , checkForeignKeys
     , RawSqlite
     , persistentBackend
     , rawSqliteConnection
@@ -50,16 +53,21 @@ import qualified Control.Exception as E
 import Control.Monad (forM_)
 import Control.Monad.IO.Unlift (MonadIO (..), MonadUnliftIO, askRunInIO, withRunInIO, withUnliftIO, unliftIO, withRunInIO)
 import Control.Monad.Logger (NoLoggingT, runNoLoggingT, MonadLogger, logWarn, runLoggingT)
+import Control.Monad.Reader (MonadReader)
+import Control.Monad.Trans.Resource (MonadResource)
 import Control.Monad.Trans.Reader (ReaderT, runReaderT, withReaderT)
 import Control.Monad.Trans.Writer (runWriterT)
 import Data.Acquire (Acquire, mkAcquire, with)
+import Data.Maybe
 import Data.Aeson
 import Data.Aeson.Types (modifyFailure)
 import Data.Conduit
+import qualified Data.Conduit.Combinators as C
 import qualified Data.Conduit.List as CL
 import qualified Data.HashMap.Lazy as HashMap
 import Data.Int (Int64)
 import Data.IORef
+import qualified Data.List as List
 import qualified Data.Map as Map
 import Data.Monoid ((<>))
 import Data.Pool (Pool)
@@ -314,41 +322,46 @@ prepare' conn sql = do
 
 insertSql' :: EntityDef -> [PersistValue] -> InsertSqlResult
 insertSql' ent vals =
-  case entityPrimary ent of
-    Just _ ->
-      ISRManyKeys sql vals
-        where sql = T.concat
-                [ "INSERT INTO "
-                , escape $ entityDB ent
-                , "("
-                , T.intercalate "," $ map (escape . fieldDB) $ entityFields ent
-                , ") VALUES("
-                , T.intercalate "," (map (const "?") $ entityFields ent)
-                , ")"
-                ]
-    Nothing ->
-      ISRInsertGet ins sel
-        where
-          sel = T.concat
-              [ "SELECT "
-              , escape $ fieldDB (entityId ent)
-              , " FROM "
-              , escape $ entityDB ent
-              , " WHERE _ROWID_=last_insert_rowid()"
-              ]
-          ins = T.concat
-              [ "INSERT INTO "
-              , escape $ entityDB ent
-              , if null (entityFields ent)
-                    then " VALUES(null)"
-                    else T.concat
-                      [ "("
-                      , T.intercalate "," $ map (escape . fieldDB) $ entityFields ent
-                      , ") VALUES("
-                      , T.intercalate "," (map (const "?") $ entityFields ent)
-                      , ")"
-                      ]
-              ]
+    case entityPrimary ent of
+        Just _ ->
+          ISRManyKeys sql vals
+            where sql = T.concat
+                    [ "INSERT INTO "
+                    , escape $ entityDB ent
+                    , "("
+                    , T.intercalate "," $ map (escape . fieldDB) cols
+                    , ") VALUES("
+                    , T.intercalate "," (map (const "?") cols)
+                    , ")"
+                    ]
+        Nothing ->
+          ISRInsertGet ins sel
+            where
+              sel = T.concat
+                  [ "SELECT "
+                  , escape $ fieldDB (entityId ent)
+                  , " FROM "
+                  , escape $ entityDB ent
+                  , " WHERE _ROWID_=last_insert_rowid()"
+                  ]
+              ins = T.concat
+                  [ "INSERT INTO "
+                  , escape $ entityDB ent
+                  , if null cols
+                        then " VALUES(null)"
+                        else T.concat
+                          [ "("
+                          , T.intercalate "," $ map (escape . fieldDB) $ cols
+                          , ") VALUES("
+                          , T.intercalate "," (map (const "?") cols)
+                          , ")"
+                          ]
+                  ]
+  where
+    notGenerated =
+        isNothing . fieldGenerated
+    cols =
+        filter notGenerated $ entityFields ent
 
 execute' :: Sqlite.Connection -> Sqlite.Statement -> [PersistValue] -> IO Int64
 execute' conn stmt vals = flip finally (liftIO $ Sqlite.reset conn stmt) $ do
@@ -390,12 +403,16 @@ showSqlType SqlBlob = "BLOB"
 showSqlType SqlBool = "BOOLEAN"
 showSqlType (SqlOther t) = t
 
-migrate' :: [EntityDef]
-         -> (Text -> IO Statement)
-         -> EntityDef
-         -> IO (Either [Text] [(Bool, Text)])
+sqliteMkColumns :: [EntityDef] -> EntityDef -> ([Column], [UniqueDef], [ForeignDef])
+sqliteMkColumns allDefs t = mkColumns allDefs t emptyBackendSpecificOverrides
+
+migrate'
+    :: [EntityDef]
+    -> (Text -> IO Statement)
+    -> EntityDef
+    -> IO (Either [Text] [(Bool, Text)])
 migrate' allDefs getter val = do
-    let (cols, uniqs, fdefs) = mkColumns allDefs val
+    let (cols, uniqs, fdefs) = sqliteMkColumns allDefs val
     let newSql = mkCreateTable False def (filter (not . safeToRemove val . cName) cols, uniqs, fdefs)
     stmt <- getter "SELECT sql FROM sqlite_master WHERE type='table' AND name=?"
     oldSql' <- with (stmtQuery stmt [PersistText $ unDBName table])
@@ -464,7 +481,7 @@ mockMigration mig = do
 -- list.
 safeToRemove :: EntityDef -> DBName -> Bool
 safeToRemove def (DBName colName)
-    = any (elem "SafeToRemove" . fieldAttrs)
+    = any (elem FieldAttrSafeToRemove . fieldAttrs)
     $ filter ((== DBName colName) . fieldDB)
     $ entityFields def
 
@@ -475,21 +492,17 @@ getCopyTable :: [EntityDef]
 getCopyTable allDefs getter def = do
     stmt <- getter $ T.concat [ "PRAGMA table_info(", escape table, ")" ]
     oldCols' <- with (stmtQuery stmt []) (\src -> runConduit $ src .| getCols)
-    let oldCols = map DBName $ filter (/= "id") oldCols' -- need to update for table id attribute ?
+    let oldCols = map DBName oldCols'
     let newCols = filter (not . safeToRemove def) $ map cName cols
     let common = filter (`elem` oldCols) newCols
     return [ (False, tmpSql)
-           , (False, copyToTemp $ addIdCol common)
+           , (False, copyToTemp common)
            , (common /= filter (not . safeToRemove def) oldCols, dropOld)
            , (False, newSql)
-           , (False, copyToFinal $ addIdCol newCols)
+           , (False, copyToFinal newCols)
            , (False, dropTmp)
            ]
   where
-    addIdCol = case entityPrimary def of
-        Nothing -> (fieldDB (entityId def) :)
-        Just _ -> id
-
     getCols = do
         x <- CL.head
         case x of
@@ -500,7 +513,7 @@ getCopyTable allDefs getter def = do
             Just y -> error $ "Invalid result from PRAGMA table_info: " ++ show y
     table = entityDB def
     tableTmp = DBName $ unDBName table <> "_backup"
-    (cols, uniqs, fdef) = mkColumns allDefs def
+    (cols, uniqs, fdef) = sqliteMkColumns allDefs def
     cols' = filter (not . safeToRemove def . cName) cols
     newSql = mkCreateTable False def (cols', uniqs, fdef)
     tmpSql = mkCreateTable True def { entityDB = tableTmp } (cols', uniqs, [])
@@ -527,60 +540,73 @@ getCopyTable allDefs getter def = do
 
 mkCreateTable :: Bool -> EntityDef -> ([Column], [UniqueDef], [ForeignDef]) -> Text
 mkCreateTable isTemp entity (cols, uniqs, fdefs) =
-  case entityPrimary entity of
-    Just pdef ->
-       T.concat
+    T.concat (header <> columns <> footer)
+  where
+    header =
         [ "CREATE"
         , if isTemp then " TEMP" else ""
         , " TABLE "
         , escape $ entityDB entity
         , "("
-        , T.drop 1 $ T.concat $ map (sqlColumn isTemp) cols
-        , ", PRIMARY KEY "
-        , "("
-        , T.intercalate "," $ map (escape . fieldDB) $ compositeFields pdef
-        , ")"
-        , T.concat $ map sqlUnique uniqs
+        ]
+
+    footer =
+        [ T.concat $ map sqlUnique uniqs
         , T.concat $ map sqlForeign fdefs
         , ")"
         ]
-    Nothing -> T.concat
-        [ "CREATE"
-        , if isTemp then " TEMP" else ""
-        , " TABLE "
-        , escape $ entityDB entity
-        , "("
-        , escape $ fieldDB (entityId entity)
-        , " "
-        , showSqlType $ fieldSqlType $ entityId entity
-        ," PRIMARY KEY"
-        , mayDefault $ defaultAttribute $ fieldAttrs $ entityId entity
-        , T.concat $ map (sqlColumn isTemp) cols
-        , T.concat $ map sqlUnique uniqs
-        , T.concat $ map sqlForeign fdefs
-        , ")"
-        ]
+
+    columns = case entityPrimary entity of
+        Just pdef ->
+            [ T.drop 1 $ T.concat $ map (sqlColumn isTemp) cols
+            , ", PRIMARY KEY "
+            , "("
+            , T.intercalate "," $ map (escape . fieldDB) $ compositeFields pdef
+            , ")"
+            ]
+
+        Nothing ->
+            [ escape $ fieldDB (entityId entity)
+            , " "
+            , showSqlType $ fieldSqlType $ entityId entity
+            , " PRIMARY KEY"
+            , mayDefault $ defaultAttribute $ fieldAttrs $ entityId entity
+            , T.concat $ map (sqlColumn isTemp) nonIdCols
+            ]
+
+    nonIdCols = filter (\c -> cName c /= fieldDB (entityId entity)) cols
 
 mayDefault :: Maybe Text -> Text
 mayDefault def = case def of
     Nothing -> ""
     Just d -> " DEFAULT " <> d
 
+mayGenerated :: Maybe Text -> Text
+mayGenerated gen = case gen of
+    Nothing -> ""
+    Just g -> " GENERATED ALWAYS AS (" <> g <> ") STORED"
+
 sqlColumn :: Bool -> Column -> Text
-sqlColumn noRef (Column name isNull typ def _cn _maxLen ref) = T.concat
+sqlColumn noRef (Column name isNull typ def gen _cn _maxLen ref) = T.concat
     [ ","
     , escape name
     , " "
     , showSqlType typ
     , if isNull then " NULL" else " NOT NULL"
     , mayDefault def
+    , mayGenerated gen
     , case ref of
         Nothing -> ""
-        Just (table, _) -> if noRef then "" else " REFERENCES " <> escape table
+        Just ColumnReference {crTableName=table, crFieldCascade=cascadeOpts} ->
+          if noRef then "" else " REFERENCES " <> escape table
+            <> onDelete cascadeOpts <> onUpdate cascadeOpts
     ]
+  where
+    onDelete opts = maybe "" (T.append " ON DELETE " . renderCascadeAction) (fcOnDelete opts)
+    onUpdate opts = maybe "" (T.append " ON UPDATE " . renderCascadeAction) (fcOnUpdate opts)
 
 sqlForeign :: ForeignDef -> Text
-sqlForeign fdef = T.concat
+sqlForeign fdef = T.concat $
     [ ", CONSTRAINT "
     , escape $ foreignConstraintNameDBName fdef
     , " FOREIGN KEY("
@@ -590,7 +616,20 @@ sqlForeign fdef = T.concat
     , "("
     , T.intercalate "," $ map (escape . snd . snd) $ foreignFields fdef
     , ")"
-    ]
+    ] ++ onDelete ++ onUpdate
+  where
+    onDelete =
+        fmap (T.append " ON DELETE ")
+        $ showAction
+        $ fcOnDelete
+        $ foreignFieldCascade fdef
+    onUpdate =
+        fmap (T.append " ON UPDATE ")
+        $ showAction
+        $ fcOnUpdate
+        $ foreignFieldCascade fdef
+
+    showAction = maybeToList . fmap renderCascadeAction
 
 sqlUnique :: UniqueDef -> Text
 sqlUnique (UniqueDef _ cname cols _) = T.concat
@@ -717,7 +756,43 @@ instance FromJSON SqliteConnectionInfo where
         <*> o .: "fkEnabled"
         <*> o .:? "extraPragmas" .!= []
 
-makeLenses ''SqliteConnectionInfo
+-- | Data type for reporting foreign key violations using 'checkForeignKeys'.
+--
+-- @since 2.11.1
+data ForeignKeyViolation = ForeignKeyViolation
+    { foreignKeyTable :: Text -- ^ The table of the violated constraint
+    , foreignKeyColumn :: Text -- ^ The column of the violated constraint
+    , foreignKeyRowId :: Int64 -- ^ The ROWID of the row with the violated foreign key constraint
+    } deriving (Eq, Ord, Show)
+
+-- | Outputs all (if any) the violated foreign key constraints in the database.
+--
+-- The main use is to validate that no foreign key constraints were
+-- broken/corrupted by anyone operating on the database with foreign keys
+-- disabled. See 'fkEnabled'.
+--
+-- @since 2.11.1
+checkForeignKeys
+    :: (MonadResource m, MonadReader env m, BackendCompatible SqlBackend env)
+    => ConduitM () ForeignKeyViolation m ()
+checkForeignKeys = rawQuery query [] .| C.mapM parse
+  where
+    parse l = case l of
+        [ PersistInt64 rowid , PersistText table , PersistText column ] ->
+            return ForeignKeyViolation
+                { foreignKeyTable = table
+                , foreignKeyColumn = column
+                , foreignKeyRowId = rowid
+                }
+        _ -> liftIO . E.throwIO . PersistMarshalError $ mconcat
+            [ "Unexpected result from foreign key check:\n", T.pack (show l) ]
+
+    query = "\
+\ SELECT origin.rowid, origin.\"table\", group_concat(foreignkeys.\"from\")\n\
+\ FROM pragma_foreign_key_check() AS origin\n\
+\ INNER JOIN pragma_foreign_key_list(origin.\"table\") AS foreignkeys\n\
+\ ON origin.fkid = foreignkeys.id AND origin.parent = foreignkeys.\"table\"\n\
+\ GROUP BY origin.rowid"
 
 -- | Like `withSqliteConnInfo`, but exposes the internal `Sqlite.Connection`.
 -- For power users who want to manually interact with SQLite's C API via
@@ -809,7 +884,6 @@ data RawSqlite backend = RawSqlite
     { _persistentBackend :: backend -- ^ The persistent backend
     , _rawSqliteConnection :: Sqlite.Connection -- ^ The underlying `Sqlite.Connection`
     }
-makeLenses ''RawSqlite
 
 instance HasPersistBackend b => HasPersistBackend (RawSqlite b) where
     type BaseBackend (RawSqlite b) = BaseBackend b
@@ -844,6 +918,7 @@ instance (PersistQueryRead b) => PersistQueryRead (RawSqlite b) where
     selectFirst filts opts = withReaderT _persistentBackend $ selectFirst filts opts
     selectKeysRes filts opts = withReaderT _persistentBackend $ selectKeysRes filts opts
     count = withReaderT _persistentBackend . count
+    exists = withReaderT _persistentBackend . exists
 
 instance (PersistQueryWrite b) => PersistQueryWrite (RawSqlite b) where
     updateWhere filts updates = withReaderT _persistentBackend $ updateWhere filts updates
@@ -872,3 +947,6 @@ instance (PersistUniqueWrite b) => PersistUniqueWrite (RawSqlite b) where
     upsert rec = withReaderT _persistentBackend . upsert rec
     upsertBy uniq rec = withReaderT _persistentBackend . upsertBy uniq rec
     putMany = withReaderT _persistentBackend . putMany
+
+makeLenses ''RawSqlite
+makeLenses ''SqliteConnectionInfo

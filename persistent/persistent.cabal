@@ -1,5 +1,5 @@
 name:            persistent
-version:         2.10.5.2
+version:         2.11.0.2
 license:         MIT
 license-file:    LICENSE
 author:          Michael Snoyman <michael@snoyman.com>
@@ -39,7 +39,6 @@ library
                    , resourcet                >= 1.1.10
                    , scientific
                    , silently
-                   , template-haskell
                    , text                     >= 1.2
                    , time                     >= 1.6
                    , transformers             >= 0.5
@@ -99,6 +98,7 @@ test-suite test
                    , http-api-data
                    , path-pieces
                    , scientific
+                   , shakespeare
                    , text
                    , time
                    , transformers

@@ -1,5 +1,5 @@
 name:            persistent-sqlite
-version:         2.10.6.1
+version:         2.11.1.0
 license:         MIT
 license-file:    LICENSE
 author:          Michael Snoyman <michael@snoyman.com>
@@ -44,13 +44,14 @@ flag use-stat4
 
 library
     build-depends:   base                    >= 4.9         && < 5
-                   , persistent              >= 2.10        && < 3
+                   , persistent              >= 2.11        && < 3
                    , aeson                   >= 1.0
                    , bytestring              >= 0.10
                    , conduit                 >= 1.2.12
                    , containers              >= 0.5
                    , microlens-th            >= 0.4.1.1
                    , monad-logger            >= 0.3.25
+                   , mtl
                    , resource-pool
                    , resourcet               >= 1.1.9
                    , text                    >= 1.2
@@ -123,11 +124,14 @@ test-suite test
                    , persistent-test
                    , bytestring
                    , containers
+                   , conduit
                    , exceptions
                    , fast-logger
                    , hspec >= 2.4
                    , HUnit
+                   , microlens
                    , monad-logger
+                   , mtl
                    , QuickCheck
                    , resourcet
                    , system-fileio

@@ -36,14 +36,16 @@ specsWith runDb = describe "rawSql" $ do
         Entity _   _  <- insertEntity $ Pet p3k "Abacate" Cat
         escape <- getEscape
         person <- getTableName (error "rawSql Person" :: Person)
-        name   <- getFieldName PersonName
+        name_   <- getFieldName PersonName
+        pet <- getTableName (error "rawSql Pet" :: Pet)
+        petName_   <- getFieldName PetName
         let query = T.concat [ "SELECT ??, ?? "
                              , "FROM ", person
                              , ", ", escape "Pet"
                              , " WHERE ", person, ".", escape "age", " >= ? "
                              , "AND ", escape "Pet", ".", escape "ownerId", " = "
                                      , person, ".", escape "id"
-                             , " ORDER BY ", person, ".", name
+                             , " ORDER BY ", person, ".", name_, ", ", pet, ".", petName_
                              ]
         ret <- rawSql query [PersistInt64 20]
         liftIO $ ret @?= [ (Entity p1k p1, Entity a1k a1)
@@ -114,7 +116,8 @@ specsWith runDb = describe "rawSql" $ do
                              , "LEFT OUTER JOIN ", pet
                              , " ON ", person, ".", escape "id"
                              , " = ", pet, ".", escape "ownerId"
-                             , " ORDER BY ", person, ".", escape "name"]
+                             , " ORDER BY ", person, ".", escape "name"
+                             , ", ", pet, ".", escape "id" ]
             person = escape "Person"
             pet    = escape "Pet"
         ret <- rawSql query []
@@ -131,6 +134,12 @@ specsWith runDb = describe "rawSql" $ do
         caseCommitRollback runDb
         runDb cleanDB
 
+    it "queries with large number of results" $ runDb $ do
+        -- max size of a GHC tuple is 62, but Eq instances currently only exist up to 15-tuples
+        -- See https://gitlab.haskell.org/ghc/ghc/-/merge_requests/3369
+        ret <- rawSql "SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?" $ map PersistInt64 [1..15]
+        liftIO $ ret @?= [(Single (1::Int), Single (2::Int), Single (3::Int), Single (4::Int), Single (5::Int), Single (6::Int), Single (7::Int), Single (8::Int), Single (9::Int), Single (10::Int), Single (11::Int), Single (12::Int), Single (13::Int), Single (14::Int), Single (15::Int))]
+
 getEscape :: MonadReader SqlBackend m => m (Text -> Text)
 getEscape = asks ((. DBName) . connEscapeName)
 
@@ -141,9 +150,9 @@ caseCommitRollback runDb = runDb $ do
 
     let p = Person1 "foo" 0
 
-    _ <- insert p
-    _ <- insert p
-    _ <- insert p
+    insert_ p
+    insert_ p
+    insert_ p
 
     c1 <- count filt
     c1 @== 3
@@ -152,15 +161,15 @@ caseCommitRollback runDb = runDb $ do
     c2 <- count filt
     c2 @== 3
 
-    _ <- insert p
+    insert_ p
     transactionUndo
     c3 <- count filt
     c3 @== 3
 
-    _ <- insert p
+    insert_ p
     transactionSave
-    _ <- insert p
-    _ <- insert p
+    insert_ p
+    insert_ p
     transactionUndo
     c4 <- count filt
     c4 @== 4

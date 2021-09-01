@@ -1,16 +1,117 @@
-{-# language RecordWildCards #-}
+{-# language RecordWildCards, OverloadedStrings, QuasiQuotes #-}
 
 import Test.Hspec
+import qualified Data.Char as Char
 import qualified Data.Text as T
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as Map
+import Data.Time
+import Text.Shakespeare.Text
+import Data.List
 
+import Database.Persist.Class.PersistField
 import Database.Persist.Quasi
 import Database.Persist.Types
 
 main :: IO ()
 main = hspec $ do
+    describe "splitExtras" $ do
+        it "works" $ do
+            splitExtras []
+                `shouldBe`
+                    mempty
+        it "works2" $ do
+            splitExtras
+                [ Line 0 ["hello", "world"]
+                ]
+                `shouldBe`
+                    ( [["hello", "world"]], mempty )
+        it "works3" $ do
+            splitExtras
+                [ Line 0 ["hello", "world"]
+                , Line 2 ["foo", "bar", "baz"]
+                ]
+                `shouldBe`
+                    ( [["hello", "world"], ["foo", "bar", "baz"]], mempty )
+        it "works4" $ do
+            let foobarbarz = ["foo", "Bar", "baz"]
+            splitExtras
+                [ Line 0 ["Hello"]
+                , Line 2 foobarbarz
+                , Line 2 foobarbarz
+                ]
+                `shouldBe`
+                    ( []
+                    , Map.fromList
+                        [ ("Hello", [foobarbarz, foobarbarz])
+                        ]
+                    )
+        it "works5" $ do
+            let foobarbarz = ["foo", "Bar", "baz"]
+            splitExtras
+                [ Line 0 ["Hello"]
+                , Line 2 foobarbarz
+                , Line 4 foobarbarz
+                ]
+                `shouldBe`
+                    ( []
+                    , Map.fromList
+                        [ ("Hello", [foobarbarz, foobarbarz])
+                        ]
+                    )
+    describe "takeColsEx" $ do
+        let subject = takeColsEx upperCaseSettings
+        it "fails on a single word" $ do
+            subject ["asdf"]
+                `shouldBe`
+                    Nothing
+        it "works if it has a name and a type" $ do
+            subject ["asdf", "Int"]
+                `shouldBe`
+                    Just FieldDef
+                        { fieldHaskell = HaskellName "asdf"
+                        , fieldDB = DBName "asdf"
+                        , fieldType = FTTypeCon Nothing "Int"
+                        , fieldSqlType = SqlOther "SqlType unset for asdf"
+                        , fieldAttrs = []
+                        , fieldStrict = True
+                        , fieldReference = NoReference
+                        , fieldCascade = noCascade
+                        , fieldComments = Nothing
+                        , fieldGenerated = Nothing
+                        }
+        it "works if it has a name, type, and cascade" $ do
+            subject ["asdf", "Int", "OnDeleteCascade", "OnUpdateCascade"]
+                `shouldBe`
+                    Just FieldDef
+                        { fieldHaskell = HaskellName "asdf"
+                        , fieldDB = DBName "asdf"
+                        , fieldType = FTTypeCon Nothing "Int"
+                        , fieldSqlType = SqlOther "SqlType unset for asdf"
+                        , fieldAttrs = []
+                        , fieldStrict = True
+                        , fieldReference = NoReference
+                        , fieldCascade = FieldCascade (Just Cascade) (Just Cascade)
+                        , fieldComments = Nothing
+                        , fieldGenerated = Nothing
+                        }
+        it "never tries to make a refernece" $ do
+            subject ["asdf", "UserId", "OnDeleteCascade"]
+                `shouldBe`
+                    Just FieldDef
+                        { fieldHaskell = HaskellName "asdf"
+                        , fieldDB = DBName "asdf"
+                        , fieldType = FTTypeCon Nothing "UserId"
+                        , fieldSqlType = SqlOther "SqlType unset for asdf"
+                        , fieldAttrs = []
+                        , fieldStrict = True
+                        , fieldReference = NoReference
+                        , fieldCascade = FieldCascade Nothing (Just Cascade)
+                        , fieldComments = Nothing
+                        , fieldGenerated = Nothing
+                        }
+
     describe "tokenization" $ do
         it "handles normal words" $
             tokenize " foo   bar  baz" `shouldBe`
@@ -121,6 +222,138 @@ main = hspec $ do
                 baz = FTTypeCon Nothing "Baz"
             parseFieldType "Foo [Bar] Baz" `shouldBe` Right (
                 foo `FTApp` bars `FTApp` baz)
+
+    describe "#1175 empty entity" $ do
+        let subject =
+                [st|
+Foo
+    name String
+    age Int
+
+EmptyEntity
+
+Bar
+    name String
+
+Baz
+    a Int
+    b String
+    c FooId
+                    |]
+
+        let preparsed =
+                preparse subject
+        it "preparse works" $ do
+            length preparsed
+                `shouldBe` do
+                    length . filter (not . T.all Char.isSpace) . T.lines
+                        $ subject
+
+        let skippedEmpty =
+                skipEmpty preparsed
+            fooLines =
+                [ Line
+                    { lineIndent = 0
+                    , tokens = "Foo" :| []
+                    }
+                , Line
+                    { lineIndent = 4
+                    , tokens = "name" :| ["String"]
+                    }
+                , Line
+                    { lineIndent = 4
+                    , tokens = "age" :| ["Int"]
+                    }
+                ]
+            emptyLines =
+                [ Line
+                    { lineIndent = 0
+                    , tokens = "EmptyEntity" :| []
+                    }
+                ]
+            barLines =
+                [ Line
+                    { lineIndent = 0
+                    , tokens = "Bar" :| []
+                    }
+                , Line
+                    { lineIndent = 4
+                    , tokens = "name" :| ["String"]
+                    }
+                ]
+            bazLines =
+                [ Line
+                    { lineIndent = 0
+                    , tokens = "Baz" :| []
+                    }
+                , Line
+                    { lineIndent = 4
+                    , tokens = "a" :| ["Int"]
+                    }
+                , Line
+                    { lineIndent = 4
+                    , tokens = "b" :| ["String"]
+                    }
+                , Line
+                    { lineIndent = 4
+                    , tokens = "c" :| ["FooId"]
+                    }
+                ]
+            resultLines =
+                concat
+                    [ fooLines
+                    , emptyLines
+                    , barLines
+                    , bazLines
+                    ]
+
+        it "skipEmpty works" $ do
+            skippedEmpty `shouldBe` resultLines
+
+        let linesAssociated =
+                associateLines skippedEmpty
+        it "associateLines works" $ do
+            linesAssociated `shouldMatchList`
+                [ LinesWithComments
+                    { lwcLines = NEL.fromList fooLines
+                    , lwcComments = []
+                    }
+                , LinesWithComments (NEL.fromList emptyLines) []
+                , LinesWithComments (NEL.fromList barLines) []
+                , LinesWithComments (NEL.fromList bazLines) []
+                ]
+
+        let parsed =
+                parse lowerCaseSettings subject
+        it "parse works" $ do
+            let test name'fieldCount xs = do
+                    case (name'fieldCount, xs) of
+                        ([], []) ->
+                            pure ()
+                        (((name, fieldCount) :_), []) ->
+                            expectationFailure
+                                $ "Expected an entity with name "
+                                <> name
+                                <> " and " <> show fieldCount <> " fields"
+                                <> ", but the list was empty..."
+                        ((name, fieldCount) : ys, (EntityDef {..} : xs)) -> do
+                            (unHaskellName entityHaskell, length entityFields)
+                                `shouldBe`
+                                    (T.pack name, fieldCount)
+                            test ys xs
+
+                result =
+                    parse lowerCaseSettings subject
+            length parsed `shouldBe` 4
+
+            test
+                [ ("Foo", 2)
+                , ("EmptyEntity", 0)
+                , ("Bar", 1)
+                , ("Baz", 3)
+                ]
+                parsed
+
 
     describe "preparse" $ do
         it "recognizes entity" $ do
@@ -448,27 +681,34 @@ main = hspec $ do
                 ]
         describe "works with extra blocks" $ do
             let [_, lowerCaseTable, idTable] =
-                    parse lowerCaseSettings $ T.unlines
-                    [ ""
-                    , "IdTable"
-                    , "    Id Day default=CURRENT_DATE"
-                    , "    name Text"
-                    , ""
-                    , "LowerCaseTable"
-                    , "    Id             sql=my_id"
-                    , "    fullName Text"
-                    , "    ExtraBlock"
-                    , "        foo bar"
-                    , "        baz"
-                    , "        bin"
-                    , "    ExtraBlock2"
-                    , "        something"
-                    , ""
-                    , "IdTable"
-                    , "    Id Day default=CURRENT_DATE"
-                    , "    name Text"
-                    , ""
-                    ]
+                    case parse lowerCaseSettings $ T.unlines
+                        [ ""
+                        , "IdTable"
+                        , "    Id Day default=CURRENT_DATE"
+                        , "    name Text"
+                        , ""
+                        , "LowerCaseTable"
+                        , "    Id             sql=my_id"
+                        , "    fullName Text"
+                        , "    ExtraBlock"
+                        , "        foo bar"
+                        , "        baz"
+                        , "        bin"
+                        , "    ExtraBlock2"
+                        , "        something"
+                        , ""
+                        , "IdTable"
+                        , "    Id Day default=CURRENT_DATE"
+                        , "    name Text"
+                        , ""
+                        ] of
+                            [a, b, c] ->
+                                [a, b, c]
+                            xs ->
+                                error
+                                $ "Expected 3 elements in list, got: "
+                                <> show (length xs)
+                                <> ", list contents: \n\n" <> intercalate "\n" (map show xs)
             describe "idTable" $ do
                 let EntityDef {..} = idTable
                 it "has no extra blocks" $ do
@@ -500,3 +740,8 @@ main = hspec $ do
                             [ ["something"]
                             ]
 
+    describe "fromPersistValue" $
+        describe "UTCTime" $
+            it "works with format" $
+                fromPersistValue (PersistText "2018-02-27 10:49:42.123")
+                    `shouldBe` Right (UTCTime (fromGregorian 2018 02 27) (timeOfDayToTime (TimeOfDay 10 49 42.123)))

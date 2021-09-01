@@ -7,6 +7,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
+{-# OPTIONS_GHC -fno-warn-deprecations #-} -- Pattern match 'PersistDbSpecific'
 -- | Use persistent-mongodb the same way you would use other persistent
 -- libraries and refer to the general persistent documentation.
 -- There are some new MongoDB specific filters under the filters section.
@@ -691,6 +692,10 @@ instance PersistQueryRead DB.MongoContext where
         query = DB.select (filtersToDoc filts) $
                   collectionName $ dummyFromFilts filts
 
+    exists filts = do
+        cnt <- count filts
+        pure (cnt > 0)
+
     -- | uses cursor option NoCursorTimeout
     -- If there is no sorting, it will turn the $snapshot option on
     -- and explicitly closes the cursor when done
@@ -1043,6 +1048,8 @@ instance DB.Val PersistValue where
   val (PersistRational _)   = throw $ PersistMongoDBUnsupported "PersistRational not implemented for the MongoDB backend"
   val (PersistArray a)      = DB.val $ PersistList a
   val (PersistDbSpecific _)   = throw $ PersistMongoDBUnsupported "PersistDbSpecific not implemented for the MongoDB backend"
+  val (PersistLiteral _)   = throw $ PersistMongoDBUnsupported "PersistLiteral not implemented for the MongoDB backend"
+  val (PersistLiteralEscaped _) = throw $ PersistMongoDBUnsupported "PersistLiteralEscaped not implemented for the MongoDB backend"
   cast' (DB.Float x)  = Just (PersistDouble x)
   cast' (DB.Int32 x)  = Just $ PersistInt64 $ fromIntegral x
   cast' (DB.Int64 x)  = Just $ PersistInt64 x
@@ -1472,5 +1479,5 @@ infix 4 `inList`
 
 -- | No intersection of lists: if no value in the field is found in the list.
 ninList :: PersistField typ => EntityField v [typ] -> [typ] -> Filter v
-f `ninList` a = Filter (unsafeCoerce f) (FilterValues a) In
+f `ninList` a = Filter (unsafeCoerce f) (FilterValues a) NotIn
 infix 4 `ninList`

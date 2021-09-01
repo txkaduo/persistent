@@ -41,21 +41,28 @@ module Init (
   , arbText
   , liftA2
   , changeBackend
+  , Proxy(..)
   ) where
+
+#if !MIN_VERSION_monad_logger(0,3,30)
+-- Needed for GHC versions 7.10.3. Can drop when we drop support for GHC
+-- 7.10.3
+import Control.Monad.IO.Class
+import Control.Monad.Logger
+import qualified Control.Monad.Fail as MonadFail
+#endif
 
 -- needed for backwards compatibility
 import Control.Monad.Base
 import Control.Monad.Catch
 import Control.Monad.IO.Unlift
-import qualified Control.Monad.Fail as MonadFail
-import Control.Monad.Logger
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
 import Control.Monad.Trans.Resource.Internal
 
 -- re-exports
-import Control.Applicative (liftA2)
+import Control.Applicative (liftA2, (<|>))
 import Control.Exception (SomeException)
 import Control.Monad (void, replicateM, liftM, when, forM_)
 import Control.Monad.Fail (MonadFail)
@@ -66,6 +73,7 @@ import qualified Data.Text as T
 import Data.Time
 import Test.Hspec
 import Test.QuickCheck.Instances ()
+import Data.Proxy
 
 import Database.Persist.TH (mkPersist, mkMigrate, share, sqlSettings, persistLowerCase, persistUpperCase, MkPersistSettings(..))
 
@@ -74,7 +82,6 @@ import Test.HUnit ((@?=),(@=?), Assertion, assertFailure, assertBool)
 import Test.QuickCheck
 
 import Control.Monad (unless, (>=>))
-import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import qualified Data.ByteString as BS
 import Data.IORef
@@ -93,7 +100,7 @@ import Data.Int (Int32, Int64)
 asIO :: IO a -> IO a
 asIO a = a
 
-(@/=), (@==), (==@) :: (Eq a, Show a, MonadIO m) => a -> a -> m ()
+(@/=), (@==), (==@) :: (HasCallStack, Eq a, Show a, MonadIO m) => a -> a -> m ()
 infix 1 @/= --, /=@
 actual @/= expected = liftIO $ assertNotEqual "" expected actual
 
@@ -106,7 +113,7 @@ expected /=@ actual = liftIO $ assertNotEqual "" expected actual
 -}
 
 
-assertNotEqual :: (Eq a, Show a) => String -> a -> a -> Assertion
+assertNotEqual :: (Eq a, Show a, HasCallStack) => String -> a -> a -> Assertion
 assertNotEqual preface expected actual =
   unless (actual /= expected) (assertFailure msg)
   where msg = (if null preface then "" else preface ++ "\n") ++
@@ -119,11 +126,15 @@ assertNotEmpty :: (MonadIO m) => [a] -> m ()
 assertNotEmpty xs = liftIO $ assertBool "" (not (null xs))
 
 isTravis :: IO Bool
-isTravis = do
-  env <- liftIO getEnvironment
-  return $ case lookup "TRAVIS" env of
-    Just "true" -> True
-    _ -> False
+isTravis = isCI
+
+isCI :: IO Bool
+isCI =  do
+    env <- liftIO getEnvironment
+    return $ case lookup "TRAVIS" env <|> lookup "CI" env of
+        Just "true" -> True
+        _ -> False
+
 
 persistSettings :: MkPersistSettings
 persistSettings = sqlSettings { mpsGeneric = True }

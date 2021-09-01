@@ -1,5 +1,6 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -15,6 +16,7 @@ module PersistentTestModels where
 import Control.Monad.Reader
 import Data.Aeson
 import Data.Text (Text)
+import Data.Proxy
 
 import Database.Persist.Sql
 import Database.Persist.TH
@@ -140,9 +142,11 @@ instance (PersistEntity a) => PersistEntity (ReverseFieldOrder a) where
     keyFromValues = fmap RFOKey . fromPersistValue . head
     keyToValues   = (:[]) . toPersistValue . unRFOKey
 
-    entityDef = revFields . entityDef . liftM unRFO
-        where
-          revFields ed = ed { entityFields = reverse (entityFields ed) }
+    entityDef = revFields . entityDef . unRfoProxy
+      where
+        revFields ed = ed { entityFields = reverse (entityFields ed) }
+        unRfoProxy :: proxy (ReverseFieldOrder a) -> Proxy a
+        unRfoProxy _ = Proxy
 
     toPersistFields = reverse . toPersistFields . unRFO
     newtype EntityField (ReverseFieldOrder a) b = EFRFO {unEFRFO :: EntityField a b}

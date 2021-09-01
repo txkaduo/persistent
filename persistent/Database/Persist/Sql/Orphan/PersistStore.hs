@@ -1,5 +1,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
@@ -14,11 +16,10 @@ module Database.Persist.Sql.Orphan.PersistStore
   , fieldDBName
   ) where
 
+import GHC.Generics (Generic)
 import Control.Exception (throwIO)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader (ReaderT, ask, withReaderT)
-import Data.Conduit (ConduitM, (.|), runConduit)
-import qualified Data.Conduit.List as CL
 import Data.Acquire (with)
 import qualified Data.Aeson as A
 import Data.ByteString.Char8 (readInteger)
@@ -44,7 +45,7 @@ import Database.Persist.Sql.Raw
 import Database.Persist.Sql.Types
 import Database.Persist.Sql.Util (
     dbIdColumns, keyAndEntityColumnNames, parseEntityValues, entityColumnNames
-  , updatePersistValue, mkUpdateText, commaSeparated)
+  , updatePersistValue, mkUpdateText, commaSeparated, mkInsertValues)
 
 withRawQuery :: MonadIO m
              => Text
@@ -113,13 +114,18 @@ fieldDBName = fieldDB . persistFieldDef
 
 instance PersistCore SqlBackend where
     newtype BackendKey SqlBackend = SqlBackendKey { unSqlBackendKey :: Int64 }
-        deriving (Show, Read, Eq, Ord, Num, Integral, PersistField, PersistFieldSql, PathPiece, ToHttpApiData, FromHttpApiData, Real, Enum, Bounded, A.ToJSON, A.FromJSON)
+        deriving stock (Show, Read, Eq, Ord, Generic)
+        deriving newtype (Num, Integral, PersistField, PersistFieldSql, PathPiece, ToHttpApiData, FromHttpApiData, Real, Enum, Bounded, A.ToJSON, A.FromJSON)
+
 instance PersistCore SqlReadBackend where
     newtype BackendKey SqlReadBackend = SqlReadBackendKey { unSqlReadBackendKey :: Int64 }
-        deriving (Show, Read, Eq, Ord, Num, Integral, PersistField, PersistFieldSql, PathPiece, ToHttpApiData, FromHttpApiData, Real, Enum, Bounded, A.ToJSON, A.FromJSON)
+        deriving stock (Show, Read, Eq, Ord, Generic)
+        deriving newtype (Num, Integral, PersistField, PersistFieldSql, PathPiece, ToHttpApiData, FromHttpApiData, Real, Enum, Bounded, A.ToJSON, A.FromJSON)
+
 instance PersistCore SqlWriteBackend where
     newtype BackendKey SqlWriteBackend = SqlWriteBackendKey { unSqlWriteBackendKey :: Int64 }
-        deriving (Show, Read, Eq, Ord, Num, Integral, PersistField, PersistFieldSql, PathPiece, ToHttpApiData, FromHttpApiData, Real, Enum, Bounded, A.ToJSON, A.FromJSON)
+        deriving stock (Show, Read, Eq, Ord, Generic)
+        deriving newtype (Num, Integral, PersistField, PersistFieldSql, PathPiece, ToHttpApiData, FromHttpApiData, Real, Enum, Bounded, A.ToJSON, A.FromJSON)
 
 instance BackendCompatible SqlBackend SqlBackend where
     projectBackend = id
@@ -202,7 +208,7 @@ instance PersistStoreWrite SqlBackend where
         tshow = T.pack . show
         throw = liftIO . throwIO . userError . T.unpack
         t = entityDef $ Just val
-        vals = map toPersistValue $ toPersistFields val
+        vals = mkInsertValues val
 
     insertMany [] = return []
     insertMany vals = do
@@ -216,14 +222,14 @@ instance PersistStoreWrite SqlBackend where
                     _ -> error "ISRSingle is expected from the connInsertManySql function"
                 where
                     ent = entityDef vals
-                    valss = map (map toPersistValue . toPersistFields) vals
+                    valss = map mkInsertValues vals
 
     insertMany_ vals0 = runChunked (length $ entityFields t) insertMany_' vals0
       where
         t = entityDef vals0
         insertMany_' vals = do
           conn <- ask
-          let valss = map (map toPersistValue . toPersistFields) vals
+          let valss = map mkInsertValues vals
           let sql = T.concat
                   [ "INSERT INTO "
                   , connEscapeName conn (entityDB t)
@@ -247,7 +253,7 @@ instance PersistStoreWrite SqlBackend where
                 , " WHERE "
                 , wher
                 ]
-            vals = map toPersistValue (toPersistFields val) `mappend` keyToValues k
+            vals = mkInsertValues val `mappend` keyToValues k
         rawExecute sql vals
       where
         go conn x = connEscapeName conn x `T.append` "=?"
@@ -277,8 +283,8 @@ instance PersistStoreWrite SqlBackend where
         let nr  = length krs
         let toVals (k,r)
                 = case entityPrimary ent of
-                    Nothing -> keyToValues k <> (toPersistValue <$> toPersistFields r)
-                    Just _  -> toPersistValue <$> toPersistFields r
+                    Nothing -> keyToValues k <> (mkInsertValues r)
+                    Just _  -> mkInsertValues r
         case connRepsertManySql conn of
             (Just mkSql) -> rawExecute (mkSql ent nr) (concatMap toVals krs)
             Nothing -> mapM_ (uncurry repsert) krs

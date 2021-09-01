@@ -99,6 +99,7 @@ module Database.Persist.Class
     , insertUniqueEntity
     , replaceUnique
     , checkUnique
+    , checkUniqueUpdateable
     , onlyUnique
 
     -- * PersistQuery
@@ -116,6 +117,7 @@ module Database.Persist.Class
 
     -- * PersistEntity
     , PersistEntity (..)
+    , SymbolToField (..)
     -- * PersistField
     , PersistField (..)
     -- * PersistConfig

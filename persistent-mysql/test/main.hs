@@ -1,5 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DataKinds, FlexibleInstances #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -36,6 +36,7 @@ import qualified MigrationColumnLengthTest
 import qualified MigrationIdempotencyTest
 import qualified MigrationOnlyTest
 import qualified MpsNoPrefixTest
+import qualified MpsCustomPrefixTest
 import qualified PersistentTest
 import qualified PersistUniqueTest
 -- FIXME: Not used... should it be?
@@ -43,12 +44,16 @@ import qualified PersistUniqueTest
 import qualified RawSqlTest
 import qualified ReadWriteTest
 import qualified Recursive
+-- TODO: can't use this as MySQL can't do DEFAULT CURRENT_DATE
 import qualified RenameTest
 import qualified SumTypeTest
 import qualified TransactionLevelTest
 import qualified UniqueTest
 import qualified UpsertTest
 import qualified CustomConstraintTest
+import qualified LongIdentifierTest
+import qualified GeneratedColumnTestSQL
+import qualified ForeignKey
 
 type Tuple a b = (a, b)
 
@@ -96,10 +101,10 @@ instance Arbitrary (DataTypeTableGeneric backend) where
      <*> (truncateTimeOfDay =<< arbitrary) -- timeFrac
      <*> (truncateUTCTime   =<< arbitrary) -- utcFrac
 
-setup :: MonadUnliftIO m => Migration -> ReaderT SqlBackend m ()
+setup :: (HasCallStack, MonadUnliftIO m) => Migration -> ReaderT SqlBackend m ()
 setup migration = do
   printMigration migration
-  _ <- runMigrationSilent migration
+  _ <- runMigrationUnsafe migration
   pure ()
 
 main :: IO ()
@@ -108,6 +113,7 @@ main = do
     mapM_ setup
       [ PersistentTest.testMigrate
       , PersistentTest.noPrefixMigrate
+      , PersistentTest.customPrefixMigrate
       , EmbedTest.embedMigrate
       , EmbedOrderTest.embedOrderMigrate
       , LargeNumberTest.numberMigrate
@@ -123,11 +129,15 @@ main = do
       , CustomPrimaryKeyReferenceTest.migration
       , MigrationColumnLengthTest.migration
       , TransactionLevelTest.migration
+      -- , LongIdentifierTest.migration
+      , ForeignKey.compositeMigrate
       ]
     PersistentTest.cleanDB
+    ForeignKey.cleanDB
 
   hspec $ do
-    RenameTest.specsWith db
+    xdescribe "This is pending on MySQL because you can't have DEFAULT CURRENT_DATE" $ do
+        RenameTest.specsWith db
     DataTypeTest.specsWith
         db
         (Just (runMigrationSilent dataTypeMigrate))
@@ -172,7 +182,9 @@ main = do
         UpsertTest.Don'tUpdateNull
         UpsertTest.UpsertPreserveOldKey
 
+    ForeignKey.specsWith db
     MpsNoPrefixTest.specsWith db
+    MpsCustomPrefixTest.specsWith db
     EmptyEntityTest.specsWith db (Just (runMigrationSilent EmptyEntityTest.migration))
     CompositeTest.specsWith db
     PersistUniqueTest.specsWith db
@@ -185,6 +197,10 @@ main = do
 
     MigrationIdempotencyTest.specsWith db
     CustomConstraintTest.specs db
+    -- TODO: implement automatic truncation for too long foreign keys, so we can run this test.
+    xdescribe "The migration for this test currently fails because of MySQL's 64 character limit for identifiers. See https://github.com/yesodweb/persistent/issues/1000 for details" $
+        LongIdentifierTest.specsWith db
+    GeneratedColumnTestSQL.specsWith db
 
 roundFn :: RealFrac a => a -> Integer
 roundFn = round
