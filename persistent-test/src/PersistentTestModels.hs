@@ -6,6 +6,7 @@ module PersistentTestModels where
 
 import Data.Aeson
 
+import qualified Data.List.NonEmpty as NEL
 import Data.Proxy
 import Test.QuickCheck
 import Database.Persist.Sql
@@ -18,7 +19,7 @@ import Data.Text (append)
 -- just need to ensure this compiles
 import PersistentTestModelsImports()
 
-share [mkPersist persistSettings { mpsGeneric = True },  mkMigrate "testMigrate", mkDeleteCascade persistSettings, mkSave "_ignoredSave"] [persistUpperCase|
+share [mkPersist persistSettings { mpsGeneric = True },  mkMigrate "testMigrate"] [persistUpperCase|
 
 -- Dedented comment
   -- Header-level comment
@@ -97,6 +98,13 @@ share [mkPersist persistSettings { mpsGeneric = True },  mkMigrate "testMigrate"
     ~no Int
     def Int
 
+  DudeWeirdColumns
+    name Text
+    foo  Int     Maybe MigrationOnly
+    bar  Double  SafeToRemove
+    UniqueName name
+    deriving Eq Show
+
   -- | This is a doc comment for a relationship.
   -- | You need to put the pipe character for each line of documentation.
   -- Lines without a pipe are omitted.
@@ -139,27 +147,6 @@ NoPrefix2
     deriving Show Eq
 
 |]
-
-share [mkMigrate "testNonGenericMigrate", mkPersist sqlSettings] [persistLowerCase|
-JsonEncoding json
-    name Text
-    age  Int
-    Primary name
-    deriving Show Eq
-
-JsonEncoding2 json
-    name Text
-    age Int
-    blood Text
-    Primary name blood
-    deriving Show Eq
-|]
-
-instance Arbitrary JsonEncoding where
-    arbitrary = JsonEncoding <$> arbitrary <*> arbitrary
-
-instance Arbitrary JsonEncoding2 where
-    arbitrary = JsonEncoding2 <$> arbitrary <*> arbitrary <*> arbitrary
 
 deriving instance Show (BackendKey backend) => Show (NoPrefix1Generic backend)
 deriving instance Eq (BackendKey backend) => Eq (NoPrefix1Generic backend)
@@ -225,7 +212,7 @@ instance (PersistEntity a) => PersistEntity (ReverseFieldOrder a) where
       where
         unRfoProxy :: proxy (ReverseFieldOrder a) -> Proxy a
         unRfoProxy _ = Proxy
-        revFields ed = ed { entityFields = reverse (entityFields ed) }
+        revFields = overEntityFields reverse
 
     toPersistFields = reverse . toPersistFields . unRFO
     newtype EntityField (ReverseFieldOrder a) b = EFRFO {unEFRFO :: EntityField a b}
@@ -233,12 +220,12 @@ instance (PersistEntity a) => PersistEntity (ReverseFieldOrder a) where
     fromPersistValues = fmap RFO . fromPersistValues . reverse
 
     newtype Unique      (ReverseFieldOrder a)   = URFO  {unURFO  :: Unique      a  }
-    persistUniqueToFieldNames = reverse . persistUniqueToFieldNames . unURFO
+    persistUniqueToFieldNames = NEL.reverse . persistUniqueToFieldNames . unURFO
     persistUniqueToValues = reverse . persistUniqueToValues . unURFO
-    persistUniqueKeys = map URFO . reverse . persistUniqueKeys . unRFO
+    persistUniqueKeys = fmap URFO . reverse . persistUniqueKeys . unRFO
 
     persistIdField = error "ReverseFieldOrder.persistIdField"
-    fieldLens = error "ReverseFieldOrder.fieldLens"
+    fieldLens x = error "ReverseFieldOrder.fieldLens"
 
 cleanDB
     :: (MonadIO m, PersistQuery backend, PersistStoreWrite (BaseBackend backend))
@@ -252,3 +239,5 @@ cleanDB = do
   deleteWhere ([] :: [Filter (OutdoorPetGeneric backend)])
   deleteWhere ([] :: [Filter (UserPTGeneric backend)])
   deleteWhere ([] :: [Filter (EmailPTGeneric backend)])
+  deleteWhere ([] :: [Filter (UpsertGeneric backend)])
+  deleteWhere ([] :: [Filter (UpsertByGeneric backend)])

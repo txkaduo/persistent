@@ -13,7 +13,7 @@
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}
 
-module OverloadedLabelTest where
+module Database.Persist.TH.OverloadedLabelSpec where
 
 import           TemplateTestImports
 
@@ -52,5 +52,11 @@ spec = describe "OverloadedLabels" $ do
 
         compiles
 
-compiles :: Expectation
-compiles = True `shouldBe` True
+    it "works for id labels" $ do
+        let UserId = #id
+            orgId = #id :: EntityField Organization OrganizationId
+
+        compiles
+
+compiles :: IO ()
+compiles = pure ()

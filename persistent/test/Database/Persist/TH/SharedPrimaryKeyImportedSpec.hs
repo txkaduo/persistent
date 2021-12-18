@@ -11,7 +11,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE StandaloneDeriving #-}
 
-module SharedPrimaryKeyTestImported where
+module Database.Persist.TH.SharedPrimaryKeyImportedSpec where
 
 import TemplateTestImports
 
@@ -21,12 +21,14 @@ import Database.Persist
 import Database.Persist.Sql
 import Database.Persist.Sql.Util
 import Database.Persist.TH
+import Language.Haskell.TH
+import Control.Monad.IO.Class
 
-import SharedPrimaryKeyTest (User, UserId)
+import Database.Persist.TH.SharedPrimaryKeySpec (User, UserId)
 
-share [ mkPersist sqlSettings ] [persistLowerCase|
+mkPersistWith sqlSettings $(discoverEntities) [persistLowerCase|
 
-Profile
+ProfileX
     Id      UserId
     email   String
 
@@ -42,13 +44,29 @@ spec = describe "Shared Primary Keys Imported" $ do
         it "should match underlying key" $ do
             sqlType (Proxy @UserId)
                 `shouldBe`
-                    sqlType (Proxy @ProfileId)
+                    sqlType (Proxy @ProfileXId)
 
-    describe "entityId FieldDef" $ do
+    describe "getEntityId FieldDef" $ do
         it "should match underlying primary key" $ do
-            let getSqlType :: PersistEntity a => Proxy a -> SqlType
-                getSqlType =
-                    fieldSqlType . entityId . entityDef
+            let
+                getSqlType :: PersistEntity a => Proxy a -> SqlType
+                getSqlType p =
+                    case getEntityId (entityDef p) of
+                        EntityIdField fd ->
+                            fieldSqlType fd
+                        _ ->
+                            SqlOther "Composite Key"
             getSqlType (Proxy @User)
                 `shouldBe`
-                    getSqlType (Proxy @Profile)
+                    getSqlType (Proxy @ProfileX)
+
+
+    describe "foreign reference should work" $ do
+        it "should have a foreign reference" $ do
+            pendingWith "issue #1289"
+            let
+                Just fd =
+                    getEntityIdField (entityDef (Proxy @ProfileX))
+            fieldReference fd
+                `shouldBe`
+                    ForeignRef (EntityNameHS "User")

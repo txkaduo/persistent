@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -10,6 +11,14 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
+
+-- Strictly, this could go as low as GHC 8.6.1, which is when DerivingVia was
+-- introduced - this base version requires 8.6.5+
+#if MIN_VERSION_base(4,12,0)
+{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE UndecidableInstances #-}
+#endif
+
 -- | A sqlite backend for persistent.
 --
 -- Note: If you prepend @WAL=off @ to your connection string, it will disable
@@ -52,10 +61,13 @@ import Control.Concurrent (threadDelay)
 import qualified Control.Exception as E
 import Control.Monad (forM_)
 import Control.Monad.IO.Unlift (MonadIO (..), MonadUnliftIO, askRunInIO, withRunInIO, withUnliftIO, unliftIO, withRunInIO)
-import Control.Monad.Logger (NoLoggingT, runNoLoggingT, MonadLogger, logWarn, runLoggingT)
+import Control.Monad.Logger (NoLoggingT, runNoLoggingT, MonadLoggerIO, logWarn, runLoggingT, askLoggerIO)
 import Control.Monad.Reader (MonadReader)
 import Control.Monad.Trans.Resource (MonadResource)
-import Control.Monad.Trans.Reader (ReaderT, runReaderT, withReaderT)
+import Control.Monad.Trans.Reader (ReaderT, runReaderT)
+#if !MIN_VERSION_base(4,12,0)
+import Control.Monad.Trans.Reader (withReaderT)
+#endif
 import Control.Monad.Trans.Writer (runWriterT)
 import Data.Acquire (Acquire, mkAcquire, with)
 import Data.Maybe
@@ -67,17 +79,20 @@ import qualified Data.Conduit.List as CL
 import qualified Data.HashMap.Lazy as HashMap
 import Data.Int (Int64)
 import Data.IORef
-import qualified Data.List as List
 import qualified Data.Map as Map
-import Data.Monoid ((<>))
 import Data.Pool (Pool)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Lens.Micro.TH (makeLenses)
 import UnliftIO.Resource (ResourceT, runResourceT)
+import Data.Foldable (toList)
 
+#if MIN_VERSION_base(4,12,0)
+import Database.Persist.Compatible
+#endif
 import Database.Persist.Sql
+import Database.Persist.SqlBackend
 import qualified Database.Persist.Sql.Util as Util
 import qualified Database.Sqlite as Sqlite
 
@@ -87,7 +102,7 @@ import qualified Database.Sqlite as Sqlite
 -- Note that this should not be used with the @:memory:@ connection string, as
 -- the pool will regularly remove connections, destroying your database.
 -- Instead, use 'withSqliteConn'.
-createSqlitePool :: (MonadLogger m, MonadUnliftIO m)
+createSqlitePool :: (MonadLoggerIO m, MonadUnliftIO m)
                  => Text -> Int -> m (Pool SqlBackend)
 createSqlitePool = createSqlitePoolFromInfo . conStringToInfo
 
@@ -98,14 +113,14 @@ createSqlitePool = createSqlitePoolFromInfo . conStringToInfo
 -- Instead, use 'withSqliteConn'.
 --
 -- @since 2.6.2
-createSqlitePoolFromInfo :: (MonadLogger m, MonadUnliftIO m)
+createSqlitePoolFromInfo :: (MonadLoggerIO m, MonadUnliftIO m)
                          => SqliteConnectionInfo -> Int -> m (Pool SqlBackend)
 createSqlitePoolFromInfo connInfo = createSqlPool $ openWith const connInfo
 
 -- | Run the given action with a connection pool.
 --
 -- Like 'createSqlitePool', this should not be used with @:memory:@.
-withSqlitePool :: (MonadUnliftIO m, MonadLogger m)
+withSqlitePool :: (MonadUnliftIO m, MonadLoggerIO m)
                => Text
                -> Int -- ^ number of connections to open
                -> (Pool SqlBackend -> m a) -> m a
@@ -116,18 +131,18 @@ withSqlitePool connInfo = withSqlPool . openWith const $ conStringToInfo connInf
 -- Like 'createSqlitePool', this should not be used with @:memory:@.
 --
 -- @since 2.6.2
-withSqlitePoolInfo :: (MonadUnliftIO m, MonadLogger m)
+withSqlitePoolInfo :: (MonadUnliftIO m, MonadLoggerIO m)
                    => SqliteConnectionInfo
                    -> Int -- ^ number of connections to open
                    -> (Pool SqlBackend -> m a) -> m a
 withSqlitePoolInfo connInfo = withSqlPool $ openWith const connInfo
 
-withSqliteConn :: (MonadUnliftIO m, MonadLogger m)
+withSqliteConn :: (MonadUnliftIO m, MonadLoggerIO m)
                => Text -> (SqlBackend -> m a) -> m a
 withSqliteConn = withSqliteConnInfo . conStringToInfo
 
 -- | @since 2.6.2
-withSqliteConnInfo :: (MonadUnliftIO m, MonadLogger m)
+withSqliteConnInfo :: (MonadUnliftIO m, MonadLoggerIO m)
                    => SqliteConnectionInfo -> (SqlBackend -> m a) -> m a
 withSqliteConnInfo = withSqlConn . openWith const
 
@@ -190,7 +205,7 @@ wrapConnection = wrapConnectionInfo (mkSqliteConnectionInfo "")
 -- | Retry if a Busy is thrown, following an exponential backoff strategy.
 --
 -- @since 2.9.3
-retryOnBusy :: (MonadUnliftIO m, MonadLogger m) => m a -> m a
+retryOnBusy :: (MonadUnliftIO m, MonadLoggerIO m) => m a -> m a
 retryOnBusy action =
   start $ take 20 $ delays 1000
   where
@@ -216,7 +231,7 @@ retryOnBusy action =
 --
 -- @since 2.9.3
 waitForDatabase
-    :: (MonadUnliftIO m, MonadLogger m, BackendCompatible SqlBackend backend)
+    :: (MonadUnliftIO m, MonadLoggerIO m, BackendCompatible SqlBackend backend)
     => ReaderT backend m ()
 waitForDatabase = retryOnBusy $ rawExecute "SELECT 42" []
 
@@ -255,26 +270,27 @@ wrapConnectionInfo connInfo conn logFunc = do
         Sqlite.finalize stmt
 
     smap <- newIORef $ Map.empty
-    return $ SqlBackend
-        { connPrepare = prepare' conn
-        , connStmtMap = smap
-        , connInsertSql = insertSql'
-        , connUpsertSql = Nothing
-        , connPutManySql = Just putManySql
-        , connInsertManySql = Nothing
-        , connClose = Sqlite.close conn
-        , connMigrateSql = migrate'
-        , connBegin = \f _ -> helper "BEGIN" f
-        , connCommit = helper "COMMIT"
-        , connRollback = ignoreExceptions . helper "ROLLBACK"
-        , connEscapeName = escape
-        , connNoLimit = "LIMIT -1"
-        , connRDBMS = "sqlite"
-        , connLimitOffset = decorateSQLWithLimitOffset "LIMIT -1"
-        , connLogFunc = logFunc
-        , connMaxParams = Just 999
-        , connRepsertManySql = Just repsertManySql
-        }
+    return $
+        setConnMaxParams 999 $
+        setConnPutManySql putManySql $
+        setConnRepsertManySql repsertManySql $
+        mkSqlBackend MkSqlBackendArgs
+            { connPrepare = prepare' conn
+            , connStmtMap = smap
+            , connInsertSql = insertSql'
+            , connClose = Sqlite.close conn
+            , connMigrateSql = migrate'
+            , connBegin = \f _ -> helper "BEGIN" f
+            , connCommit = helper "COMMIT"
+            , connRollback = ignoreExceptions . helper "ROLLBACK"
+            , connEscapeFieldName = escape . unFieldNameDB
+            , connEscapeTableName = escape . unEntityNameDB . getEntityDBName
+            , connEscapeRawName = escape
+            , connNoLimit = "LIMIT -1"
+            , connRDBMS = "sqlite"
+            , connLimitOffset = decorateSQLWithLimitOffset "LIMIT -1"
+            , connLogFunc = logFunc
+            }
   where
     helper t getter = do
         stmt <- getter t
@@ -322,36 +338,36 @@ prepare' conn sql = do
 
 insertSql' :: EntityDef -> [PersistValue] -> InsertSqlResult
 insertSql' ent vals =
-    case entityPrimary ent of
-        Just _ ->
+    case getEntityId ent of
+        EntityIdNaturalKey _ ->
           ISRManyKeys sql vals
             where sql = T.concat
                     [ "INSERT INTO "
-                    , escape $ entityDB ent
+                    , escapeE $ getEntityDBName ent
                     , "("
-                    , T.intercalate "," $ map (escape . fieldDB) cols
+                    , T.intercalate "," $ map (escapeF . fieldDB) cols
                     , ") VALUES("
                     , T.intercalate "," (map (const "?") cols)
                     , ")"
                     ]
-        Nothing ->
+        EntityIdField fd ->
           ISRInsertGet ins sel
             where
               sel = T.concat
                   [ "SELECT "
-                  , escape $ fieldDB (entityId ent)
+                  , escapeF $ fieldDB fd
                   , " FROM "
-                  , escape $ entityDB ent
+                  , escapeE $ getEntityDBName ent
                   , " WHERE _ROWID_=last_insert_rowid()"
                   ]
               ins = T.concat
                   [ "INSERT INTO "
-                  , escape $ entityDB ent
+                  , escapeE $ getEntityDBName ent
                   , if null cols
                         then " VALUES(null)"
                         else T.concat
                           [ "("
-                          , T.intercalate "," $ map (escape . fieldDB) $ cols
+                          , T.intercalate "," $ map (escapeF . fieldDB) $ cols
                           , ") VALUES("
                           , T.intercalate "," (map (const "?") cols)
                           , ")"
@@ -361,7 +377,7 @@ insertSql' ent vals =
     notGenerated =
         isNothing . fieldGenerated
     cols =
-        filter notGenerated $ entityFields ent
+        filter notGenerated $ getEntityFields ent
 
 execute' :: Sqlite.Connection -> Sqlite.Statement -> [PersistValue] -> IO Int64
 execute' conn stmt vals = flip finally (liftIO $ Sqlite.reset conn stmt) $ do
@@ -415,7 +431,7 @@ migrate' allDefs getter val = do
     let (cols, uniqs, fdefs) = sqliteMkColumns allDefs val
     let newSql = mkCreateTable False def (filter (not . safeToRemove val . cName) cols, uniqs, fdefs)
     stmt <- getter "SELECT sql FROM sqlite_master WHERE type='table' AND name=?"
-    oldSql' <- with (stmtQuery stmt [PersistText $ unDBName table])
+    oldSql' <- with (stmtQuery stmt [PersistText $ unEntityNameDB table])
       (\src -> runConduit $ src .| go)
     case oldSql' of
         Nothing -> return $ Right [(False, newSql)]
@@ -427,7 +443,7 @@ migrate' allDefs getter val = do
                     return $ Right sql
   where
     def = val
-    table = entityDB def
+    table = getEntityDBName def
     go = do
         x <- CL.head
         case x of
@@ -440,59 +456,66 @@ migrate' allDefs getter val = do
 -- with the difference that an actual database isn't needed for it.
 mockMigration :: Migration -> IO ()
 mockMigration mig = do
-  smap <- newIORef $ Map.empty
-  let sqlbackend = SqlBackend
-                   { connPrepare = \_ -> do
-                                     return Statement
-                                                { stmtFinalize = return ()
-                                                , stmtReset = return ()
-                                                , stmtExecute = undefined
-                                                , stmtQuery = \_ -> return $ return ()
-                                                }
-                   , connStmtMap = smap
-                   , connInsertSql = insertSql'
-                   , connInsertManySql = Nothing
-                   , connClose = undefined
-                   , connMigrateSql = migrate'
-                   , connBegin = \f _ -> helper "BEGIN" f
-                   , connCommit = helper "COMMIT"
-                   , connRollback = ignoreExceptions . helper "ROLLBACK"
-                   , connEscapeName = escape
-                   , connNoLimit = "LIMIT -1"
-                   , connRDBMS = "sqlite"
-                   , connLimitOffset = decorateSQLWithLimitOffset "LIMIT -1"
-                   , connLogFunc = undefined
-                   , connUpsertSql = undefined
-                   , connPutManySql = undefined
-                   , connMaxParams = Just 999
-                   , connRepsertManySql = Nothing
-                   }
-      result = runReaderT . runWriterT . runWriterT $ mig
-  resp <- result sqlbackend
-  mapM_ TIO.putStrLn $ map snd $ snd resp
-    where
-      helper t getter = do
-                      stmt <- getter t
-                      _ <- stmtExecute stmt []
-                      stmtReset stmt
-      ignoreExceptions = E.handle (\(_ :: E.SomeException) -> return ())
+    smap <- newIORef $ Map.empty
+    let sqlbackend =
+            setConnMaxParams 999 $
+            mkSqlBackend MkSqlBackendArgs
+                { connPrepare = \_ -> do
+                    return Statement
+                        { stmtFinalize = return ()
+                        , stmtReset = return ()
+                        , stmtExecute = undefined
+                        , stmtQuery = \_ -> return $ return ()
+                        }
+                , connStmtMap = smap
+                , connInsertSql = insertSql'
+                , connClose = undefined
+                , connMigrateSql = migrate'
+                , connBegin = \f _ -> helper "BEGIN" f
+                , connCommit = helper "COMMIT"
+                , connRollback = ignoreExceptions . helper "ROLLBACK"
+                , connEscapeFieldName = escape . unFieldNameDB
+                , connEscapeTableName = escape . unEntityNameDB . getEntityDBName
+                , connEscapeRawName = escape
+                , connNoLimit = "LIMIT -1"
+                , connRDBMS = "sqlite"
+                , connLimitOffset = decorateSQLWithLimitOffset "LIMIT -1"
+                , connLogFunc = undefined
+                }
+        result = runReaderT . runWriterT . runWriterT $ mig
+    resp <- result sqlbackend
+    mapM_ TIO.putStrLn $ map snd $ snd resp
+  where
+    helper t getter = do
+        stmt <- getter t
+        _ <- stmtExecute stmt []
+        stmtReset stmt
+    ignoreExceptions =
+        E.handle (\(_ :: E.SomeException) -> return ())
 
 -- | Check if a column name is listed as the "safe to remove" in the entity
 -- list.
-safeToRemove :: EntityDef -> DBName -> Bool
-safeToRemove def (DBName colName)
+safeToRemove :: EntityDef -> FieldNameDB -> Bool
+safeToRemove def (FieldNameDB colName)
     = any (elem FieldAttrSafeToRemove . fieldAttrs)
-    $ filter ((== DBName colName) . fieldDB)
-    $ entityFields def
+    $ filter ((== FieldNameDB colName) . fieldDB)
+    $ allEntityFields
+  where
+    allEntityFields =
+        getEntityFieldsDatabase def <> case getEntityId def of
+            EntityIdField fdef ->
+                [fdef]
+            _ ->
+                []
 
 getCopyTable :: [EntityDef]
              -> (Text -> IO Statement)
              -> EntityDef
              -> IO [(Bool, Text)]
 getCopyTable allDefs getter def = do
-    stmt <- getter $ T.concat [ "PRAGMA table_info(", escape table, ")" ]
+    stmt <- getter $ T.concat [ "PRAGMA table_info(", escapeE table, ")" ]
     oldCols' <- with (stmtQuery stmt []) (\src -> runConduit $ src .| getCols)
-    let oldCols = map DBName oldCols'
+    let oldCols = map FieldNameDB oldCols'
     let newCols = filter (not . safeToRemove def) $ map cName cols
     let common = filter (`elem` oldCols) newCols
     return [ (False, tmpSql)
@@ -511,31 +534,31 @@ getCopyTable allDefs getter def = do
                 names <- getCols
                 return $ name : names
             Just y -> error $ "Invalid result from PRAGMA table_info: " ++ show y
-    table = entityDB def
-    tableTmp = DBName $ unDBName table <> "_backup"
+    table = getEntityDBName def
+    tableTmp = EntityNameDB $ unEntityNameDB table <> "_backup"
     (cols, uniqs, fdef) = sqliteMkColumns allDefs def
     cols' = filter (not . safeToRemove def . cName) cols
     newSql = mkCreateTable False def (cols', uniqs, fdef)
-    tmpSql = mkCreateTable True def { entityDB = tableTmp } (cols', uniqs, [])
-    dropTmp = "DROP TABLE " <> escape tableTmp
-    dropOld = "DROP TABLE " <> escape table
+    tmpSql = mkCreateTable True (setEntityDBName tableTmp def) (cols', uniqs, [])
+    dropTmp = "DROP TABLE " <> escapeE tableTmp
+    dropOld = "DROP TABLE " <> escapeE table
     copyToTemp common = T.concat
         [ "INSERT INTO "
-        , escape tableTmp
+        , escapeE tableTmp
         , "("
-        , T.intercalate "," $ map escape common
+        , T.intercalate "," $ map escapeF common
         , ") SELECT "
-        , T.intercalate "," $ map escape common
+        , T.intercalate "," $ map escapeF common
         , " FROM "
-        , escape table
+        , escapeE table
         ]
     copyToFinal newCols = T.concat
         [ "INSERT INTO "
-        , escape table
+        , escapeE table
         , " SELECT "
-        , T.intercalate "," $ map escape newCols
+        , T.intercalate "," $ map escapeF newCols
         , " FROM "
-        , escape tableTmp
+        , escapeE tableTmp
         ]
 
 mkCreateTable :: Bool -> EntityDef -> ([Column], [UniqueDef], [ForeignDef]) -> Text
@@ -546,7 +569,7 @@ mkCreateTable isTemp entity (cols, uniqs, fdefs) =
         [ "CREATE"
         , if isTemp then " TEMP" else ""
         , " TABLE "
-        , escape $ entityDB entity
+        , escapeE $ getEntityDBName entity
         , "("
         ]
 
@@ -556,25 +579,25 @@ mkCreateTable isTemp entity (cols, uniqs, fdefs) =
         , ")"
         ]
 
-    columns = case entityPrimary entity of
-        Just pdef ->
+    columns = case getEntityId entity of
+        EntityIdNaturalKey pdef ->
             [ T.drop 1 $ T.concat $ map (sqlColumn isTemp) cols
             , ", PRIMARY KEY "
             , "("
-            , T.intercalate "," $ map (escape . fieldDB) $ compositeFields pdef
+            , T.intercalate "," $ map (escapeF . fieldDB) $ toList $ compositeFields pdef
             , ")"
             ]
 
-        Nothing ->
-            [ escape $ fieldDB (entityId entity)
+        EntityIdField fd ->
+            [ escapeF $ fieldDB fd
             , " "
-            , showSqlType $ fieldSqlType $ entityId entity
+            , showSqlType $ fieldSqlType fd
             , " PRIMARY KEY"
-            , mayDefault $ defaultAttribute $ fieldAttrs $ entityId entity
+            , mayDefault $ defaultAttribute $ fieldAttrs fd
             , T.concat $ map (sqlColumn isTemp) nonIdCols
             ]
 
-    nonIdCols = filter (\c -> cName c /= fieldDB (entityId entity)) cols
+    nonIdCols = filter (\c -> Just (cName c) /= fmap fieldDB (getEntityIdField entity)) cols
 
 mayDefault :: Maybe Text -> Text
 mayDefault def = case def of
@@ -589,7 +612,7 @@ mayGenerated gen = case gen of
 sqlColumn :: Bool -> Column -> Text
 sqlColumn noRef (Column name isNull typ def gen _cn _maxLen ref) = T.concat
     [ ","
-    , escape name
+    , escapeF name
     , " "
     , showSqlType typ
     , if isNull then " NULL" else " NOT NULL"
@@ -598,7 +621,7 @@ sqlColumn noRef (Column name isNull typ def gen _cn _maxLen ref) = T.concat
     , case ref of
         Nothing -> ""
         Just ColumnReference {crTableName=table, crFieldCascade=cascadeOpts} ->
-          if noRef then "" else " REFERENCES " <> escape table
+          if noRef then "" else " REFERENCES " <> escapeE table
             <> onDelete cascadeOpts <> onUpdate cascadeOpts
     ]
   where
@@ -608,13 +631,13 @@ sqlColumn noRef (Column name isNull typ def gen _cn _maxLen ref) = T.concat
 sqlForeign :: ForeignDef -> Text
 sqlForeign fdef = T.concat $
     [ ", CONSTRAINT "
-    , escape $ foreignConstraintNameDBName fdef
+    , escapeC $ foreignConstraintNameDBName fdef
     , " FOREIGN KEY("
-    , T.intercalate "," $ map (escape . snd. fst) $ foreignFields fdef
+    , T.intercalate "," $ map (escapeF . snd. fst) $ foreignFields fdef
     , ") REFERENCES "
-    , escape $ foreignRefTableDBName fdef
+    , escapeE $ foreignRefTableDBName fdef
     , "("
-    , T.intercalate "," $ map (escape . snd . snd) $ foreignFields fdef
+    , T.intercalate "," $ map (escapeF . snd . snd) $ foreignFields fdef
     , ")"
     ] ++ onDelete ++ onUpdate
   where
@@ -634,14 +657,23 @@ sqlForeign fdef = T.concat $
 sqlUnique :: UniqueDef -> Text
 sqlUnique (UniqueDef _ cname cols _) = T.concat
     [ ",CONSTRAINT "
-    , escape cname
+    , escapeC cname
     , " UNIQUE ("
-    , T.intercalate "," $ map (escape . snd) cols
+    , T.intercalate "," $ map (escapeF . snd) $ toList cols
     , ")"
     ]
 
-escape :: DBName -> Text
-escape (DBName s) =
+escapeC :: ConstraintNameDB -> Text
+escapeC = escapeWith escape
+
+escapeE :: EntityNameDB -> Text
+escapeE = escapeWith escape
+
+escapeF :: FieldNameDB -> Text
+escapeF = escapeWith escape
+
+escape :: Text -> Text
+escape s =
     T.concat [q, T.concatMap go s, q]
   where
     q = T.singleton '"'
@@ -649,24 +681,24 @@ escape (DBName s) =
     go c = T.singleton c
 
 putManySql :: EntityDef -> Int -> Text
-putManySql ent n = putManySql' conflictColumns fields ent n
+putManySql ent n = putManySql' conflictColumns (toList fields) ent n
   where
-    fields = entityFields ent
-    conflictColumns = concatMap (map (escape . snd) . uniqueFields) (entityUniques ent)
+    fields = getEntityFields ent
+    conflictColumns = concatMap (map (escapeF . snd) . toList . uniqueFields) (getEntityUniques ent)
 
 repsertManySql :: EntityDef -> Int -> Text
-repsertManySql ent n = putManySql' conflictColumns fields ent n
+repsertManySql ent n = putManySql' conflictColumns (toList fields) ent n
   where
     fields = keyAndEntityFields ent
-    conflictColumns = escape . fieldDB <$> entityKeyFields ent
+    conflictColumns = escapeF . fieldDB <$> toList (getEntityKeyFields ent)
 
 putManySql' :: [Text] -> [FieldDef] -> EntityDef -> Int -> Text
 putManySql' conflictColumns fields ent n = q
   where
-    fieldDbToText = escape . fieldDB
+    fieldDbToText = escapeF . fieldDB
     mkAssignment f = T.concat [f, "=EXCLUDED.", f]
 
-    table = escape . entityDB $ ent
+    table = escapeE . getEntityDBName $ ent
     columns = Util.commaSeparated $ map fieldDbToText fields
     placeholders = map (const "?") fields
     updates = map (mkAssignment . fieldDbToText) fields
@@ -787,12 +819,13 @@ checkForeignKeys = rawQuery query [] .| C.mapM parse
         _ -> liftIO . E.throwIO . PersistMarshalError $ mconcat
             [ "Unexpected result from foreign key check:\n", T.pack (show l) ]
 
-    query = "\
-\ SELECT origin.rowid, origin.\"table\", group_concat(foreignkeys.\"from\")\n\
-\ FROM pragma_foreign_key_check() AS origin\n\
-\ INNER JOIN pragma_foreign_key_list(origin.\"table\") AS foreignkeys\n\
-\ ON origin.fkid = foreignkeys.id AND origin.parent = foreignkeys.\"table\"\n\
-\ GROUP BY origin.rowid"
+    query = T.unlines
+        [ "SELECT origin.rowid, origin.\"table\", group_concat(foreignkeys.\"from\")"
+        , "FROM pragma_foreign_key_check() AS origin"
+        , "INNER JOIN pragma_foreign_key_list(origin.\"table\") AS foreignkeys"
+        , "ON origin.fkid = foreignkeys.id AND origin.parent = foreignkeys.\"table\""
+        , "GROUP BY origin.rowid"
+        ]
 
 -- | Like `withSqliteConnInfo`, but exposes the internal `Sqlite.Connection`.
 -- For power users who want to manually interact with SQLite's C API via
@@ -800,12 +833,12 @@ checkForeignKeys = rawQuery query [] .| C.mapM parse
 --
 -- @since 2.10.2
 withRawSqliteConnInfo
-    :: (MonadUnliftIO m, MonadLogger m)
+    :: (MonadUnliftIO m, MonadLoggerIO m)
     => SqliteConnectionInfo
     -> (RawSqlite SqlBackend -> m a)
     -> m a
 withRawSqliteConnInfo connInfo f = do
-    logFunc <- askLogFunc
+    logFunc <- askLoggerIO
     withRunInIO $ \run -> E.bracket (openBackend logFunc) closeBackend $ run . f
   where
     openBackend = openWith RawSqlite connInfo
@@ -820,7 +853,7 @@ withRawSqliteConnInfo connInfo f = do
 --
 -- @since 2.10.6
 createRawSqlitePoolFromInfo
-    :: (MonadLogger m, MonadUnliftIO m)
+    :: (MonadLoggerIO m, MonadUnliftIO m)
     => SqliteConnectionInfo
     -> (RawSqlite SqlBackend -> m ())
     -- ^ An action that is run whenever a new `RawSqlite` connection is
@@ -841,7 +874,7 @@ createRawSqlitePoolFromInfo connInfo f n = do
 --
 -- @since 2.10.6
 createRawSqlitePoolFromInfo_
-    :: (MonadLogger m, MonadUnliftIO m)
+    :: (MonadLoggerIO m, MonadUnliftIO m)
     => SqliteConnectionInfo -> Int -> m (Pool (RawSqlite SqlBackend))
 createRawSqlitePoolFromInfo_ connInfo =
   createRawSqlitePoolFromInfo connInfo (const (return ()))
@@ -850,7 +883,7 @@ createRawSqlitePoolFromInfo_ connInfo =
 --
 -- @since 2.10.6
 withRawSqlitePoolInfo
-    :: (MonadUnliftIO m, MonadLogger m)
+    :: (MonadUnliftIO m, MonadLoggerIO m)
     => SqliteConnectionInfo
     -> (RawSqlite SqlBackend -> m ())
     -> Int -- ^ number of connections to open
@@ -868,7 +901,7 @@ withRawSqlitePoolInfo connInfo f n work = do
 --
 -- @since 2.10.6
 withRawSqlitePoolInfo_
-    :: (MonadUnliftIO m, MonadLogger m)
+    :: (MonadUnliftIO m, MonadLoggerIO m)
     => SqliteConnectionInfo
     -> Int -- ^ number of connections to open
     -> (Pool (RawSqlite SqlBackend) -> m a)
@@ -885,15 +918,17 @@ data RawSqlite backend = RawSqlite
     , _rawSqliteConnection :: Sqlite.Connection -- ^ The underlying `Sqlite.Connection`
     }
 
-instance HasPersistBackend b => HasPersistBackend (RawSqlite b) where
-    type BaseBackend (RawSqlite b) = BaseBackend b
-    persistBackend = persistBackend . _persistentBackend
-
 instance BackendCompatible b (RawSqlite b) where
     projectBackend = _persistentBackend
 
+#if MIN_VERSION_base(4,12,0)
 instance (PersistCore b) => PersistCore (RawSqlite b) where
-    newtype BackendKey (RawSqlite b) = RawSqliteKey (BackendKey b)
+  newtype BackendKey (RawSqlite b) = RawSqliteKey { unRawSqliteKey :: BackendKey (Compatible b (RawSqlite b)) }
+
+makeCompatibleKeyInstances [t| forall b. Compatible b (RawSqlite b) |]
+#else
+instance (PersistCore b) => PersistCore (RawSqlite b) where
+  newtype BackendKey (RawSqlite b) = RawSqliteKey { unRawSqliteKey :: BackendKey (RawSqlite b) }
 
 deriving instance (Show (BackendKey b)) => Show (BackendKey (RawSqlite b))
 deriving instance (Read (BackendKey b)) => Read (BackendKey (RawSqlite b))
@@ -908,6 +943,17 @@ deriving instance (Enum (BackendKey b)) => Enum (BackendKey (RawSqlite b))
 deriving instance (Bounded (BackendKey b)) => Bounded (BackendKey (RawSqlite b))
 deriving instance (ToJSON (BackendKey b)) => ToJSON (BackendKey (RawSqlite b))
 deriving instance (FromJSON (BackendKey b)) => FromJSON (BackendKey (RawSqlite b))
+#endif
+
+
+#if MIN_VERSION_base(4,12,0)
+$(pure [])
+
+makeCompatibleInstances [t| forall b. Compatible b (RawSqlite b) |]
+#else
+instance HasPersistBackend b => HasPersistBackend (RawSqlite b) where
+    type BaseBackend (RawSqlite b) = BaseBackend b
+    persistBackend = persistBackend . _persistentBackend
 
 instance (PersistStoreRead b) => PersistStoreRead (RawSqlite b) where
     get = withReaderT _persistentBackend . get
@@ -947,6 +993,7 @@ instance (PersistUniqueWrite b) => PersistUniqueWrite (RawSqlite b) where
     upsert rec = withReaderT _persistentBackend . upsert rec
     upsertBy uniq rec = withReaderT _persistentBackend . upsertBy uniq rec
     putMany = withReaderT _persistentBackend . putMany
+#endif
 
 makeLenses ''RawSqlite
 makeLenses ''SqliteConnectionInfo

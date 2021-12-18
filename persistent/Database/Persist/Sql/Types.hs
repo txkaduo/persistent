@@ -1,6 +1,6 @@
 module Database.Persist.Sql.Types
     ( module Database.Persist.Sql.Types
-    , SqlBackend (..), SqlReadBackend (..), SqlWriteBackend (..)
+    , SqlBackend, SqlReadBackend (..), SqlWriteBackend (..)
     , Statement (..), LogFunc, InsertSqlResult (..)
     , readToUnknown, readToWrite, writeToUnknown
     , SqlBackendCanRead, SqlBackendCanWrite, SqlReadT, SqlWriteT, IsSqlBackend
@@ -8,27 +8,25 @@ module Database.Persist.Sql.Types
     , ConnectionPoolConfig(..)
     ) where
 
-import Database.Persist.Types.Base (FieldCascade)
-
 import Control.Exception (Exception(..))
 import Control.Monad.Logger (NoLoggingT)
-import Control.Monad.Trans.Reader (ReaderT (..))
+import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Trans.Resource (ResourceT)
 import Control.Monad.Trans.Writer (WriterT)
 import Data.Pool (Pool)
 import Data.Text (Text, unpack)
 
-import Database.Persist.Types
-import Database.Persist.Sql.Types.Internal
 import Data.Time (NominalDiffTime)
+import Database.Persist.Sql.Types.Internal
+import Database.Persist.Types
 
 data Column = Column
-    { cName      :: !DBName
+    { cName      :: !FieldNameDB
     , cNull      :: !Bool
     , cSqlType   :: !SqlType
     , cDefault   :: !(Maybe Text)
     , cGenerated :: !(Maybe Text)
-    , cDefaultConstraintName   :: !(Maybe DBName)
+    , cDefaultConstraintName   :: !(Maybe ConstraintNameDB)
     , cMaxLen    :: !(Maybe Integer)
     , cReference :: !(Maybe ColumnReference)
     }
@@ -38,11 +36,11 @@ data Column = Column
 --
 -- @since 2.11.0.0
 data ColumnReference = ColumnReference
-    { crTableName :: !DBName
+    { crTableName :: !EntityNameDB
     -- ^ The table name that the
     --
     -- @since 2.11.0.0
-    , crConstraintName :: !DBName
+    , crConstraintName :: !ConstraintNameDB
     -- ^ The name of the foreign key constraint.
     --
     -- @since 2.11.0.0
@@ -62,21 +60,6 @@ instance Exception PersistentSqlException
 type SqlPersistT = ReaderT SqlBackend
 
 type SqlPersistM = SqlPersistT (NoLoggingT (ResourceT IO))
-
-type Sql = Text
-
--- Bool indicates if the Sql is safe
-type CautiousMigration = [(Bool, Sql)]
-
--- | A 'Migration' is a four level monad stack consisting of:
---
--- * @'WriterT' ['Text']@ representing a log of errors in the migrations.
--- * @'WriterT' 'CautiousMigration'@ representing a list of migrations to
---   run, along with whether or not they are safe.
--- * @'ReaderT' 'SqlBackend'@, aka the 'SqlPersistT' transformer for
---   database interop.
--- * @'IO'@ for arbitrary IO.
-type Migration = WriterT [Text] (WriterT CautiousMigration (ReaderT SqlBackend IO)) ()
 
 type ConnectionPool = Pool SqlBackend
 
@@ -156,28 +139,3 @@ defaultConnectionPoolConfig = ConnectionPoolConfig 1 600 10
 newtype Single a = Single {unSingle :: a}
     deriving (Eq, Ord, Show, Read)
 
--- | An exception indicating that Persistent refused to run some unsafe
--- migrations. Contains a list of pairs where the Bool tracks whether the
--- migration was unsafe (True means unsafe), and the Sql is the sql statement
--- for the migration.
---
--- @since 2.11.1.0
-newtype PersistUnsafeMigrationException
-  = PersistUnsafeMigrationException [(Bool, Sql)]
-
--- | This 'Show' instance renders an error message suitable for printing to the
--- console. This is a little dodgy, but since GHC uses Show instances when
--- displaying uncaught exceptions, we have little choice.
-instance Show PersistUnsafeMigrationException where
-  show (PersistUnsafeMigrationException mig) =
-    concat
-      [ "\n\nDatabase migration: manual intervention required.\n"
-      , "The unsafe actions are prefixed by '***' below:\n\n"
-      , unlines $ map displayMigration mig
-      ]
-    where
-      displayMigration :: (Bool, Sql) -> String
-      displayMigration (True,  s) = "*** " ++ unpack s ++ ";"
-      displayMigration (False, s) = "    " ++ unpack s ++ ";"
-
-instance Exception PersistUnsafeMigrationException

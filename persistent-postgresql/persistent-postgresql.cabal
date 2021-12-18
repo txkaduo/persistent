@@ -1,5 +1,5 @@
 name:            persistent-postgresql
-version:         2.11.0.1
+version:         2.13.2.0
 license:         MIT
 license-file:    LICENSE
 author:          Felipe Lessa, Michael Snoyman <michael@snoyman.com>
@@ -16,7 +16,7 @@ extra-source-files: ChangeLog.md
 
 library
     build-depends:   base                  >= 4.9      && < 5
-                   , persistent            >= 2.11     && < 3
+                   , persistent            >= 2.13     && < 3
                    , aeson                 >= 1.0
                    , attoparsec
                    , blaze-builder
@@ -35,6 +35,7 @@ library
                    , transformers          >= 0.5
                    , unliftio-core
     exposed-modules: Database.Persist.Postgresql
+                   , Database.Persist.Postgresql.Internal
                    , Database.Persist.Postgresql.JSON
     ghc-options:     -Wall
     default-language: Haskell2010
@@ -53,13 +54,15 @@ test-suite test
                      JSONTest
                      CustomConstraintTest
                      PgIntervalTest
+                     UpsertWhere
+                     ImplicitUuidSpec
+                     MigrationReferenceSpec
     ghc-options:     -Wall
 
     build-depends:   base                 >= 4.9 && < 5
                    , persistent
                    , persistent-postgresql
                    , persistent-qq
-                   , persistent-template
                    , persistent-test
                    , aeson
                    , bytestring
@@ -68,6 +71,7 @@ test-suite test
                    , HUnit
                    , hspec                >= 2.4
                    , hspec-expectations
+                   , hspec-expectations-lifted
                    , monad-logger
                    , QuickCheck
                    , quickcheck-instances
@@ -75,7 +79,29 @@ test-suite test
                    , text
                    , time
                    , transformers
+                   , path-pieces
+                   , http-api-data
                    , unliftio-core
+                   , unliftio
                    , unordered-containers
                    , vector
+    default-language: Haskell2010
+
+executable conn-kill
+    buildable: False
+    main-is: Main.hs
+    hs-source-dirs: conn-killed
+    ghc-options: -threaded
+    build-depends:
+        base
+      , persistent-postgresql
+      , monad-logger
+      , text
+      , unliftio
+      , time
+      , transformers
+      , persistent
+      , bytestring
+      , resource-pool
+      , mtl
     default-language: Haskell2010

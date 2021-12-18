@@ -3,42 +3,42 @@
 {-# LANGUAGE TypeOperators #-}
 
 module Database.Persist.Class.PersistUnique
-  ( PersistUniqueRead(..)
-  , PersistUniqueWrite(..)
-  , OnlyOneUniqueKey(..)
-  , onlyOneUniqueDef
-  , AtLeastOneUniqueKey(..)
-  , atLeastOneUniqueDef
-  , NoUniqueKeysError
-  , MultipleUniqueKeysError
-  , getByValue
-  , getByValueUniques
-  , insertBy
-  , insertUniqueEntity
-  , replaceUnique
-  , checkUnique
-  , checkUniqueUpdateable
-  , onlyUnique
-  , defaultUpsertBy
-  , defaultPutMany
-  , persistUniqueKeyValues
-  )
-  where
+    ( PersistUniqueRead(..)
+    , PersistUniqueWrite(..)
+    , OnlyOneUniqueKey(..)
+    , onlyOneUniqueDef
+    , AtLeastOneUniqueKey(..)
+    , atLeastOneUniqueDef
+    , NoUniqueKeysError
+    , MultipleUniqueKeysError
+    , getByValue
+    , getByValueUniques
+    , insertBy
+    , insertUniqueEntity
+    , replaceUnique
+    , checkUnique
+    , checkUniqueUpdateable
+    , onlyUnique
+    , defaultUpsertBy
+    , defaultPutMany
+    , persistUniqueKeyValues
+    )
+    where
 
 import Control.Monad (liftM)
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Trans.Reader (ReaderT)
 import Data.Function (on)
-import Data.List ((\\), deleteFirstsBy)
+import Data.List (deleteFirstsBy, (\\))
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import GHC.TypeLits (ErrorMessage(..))
 
-import Database.Persist.Types
-import Database.Persist.Class.PersistStore
 import Database.Persist.Class.PersistEntity
+import Database.Persist.Class.PersistStore
+import Database.Persist.Types
 
 -- | Queries against 'Unique' keys (other than the id 'Key').
 --
@@ -55,8 +55,7 @@ import Database.Persist.Class.PersistEntity
 -- you must manually place a unique index on a field to have a uniqueness
 -- constraint.
 --
-class (PersistCore backend, PersistStoreRead backend) =>
-      PersistUniqueRead backend  where
+class PersistStoreRead backend => PersistUniqueRead backend  where
     -- | Get a record by unique key, if available. Returns also the identifier.
     --
     -- === __Example usage__
@@ -297,13 +296,13 @@ class PersistEntity record => OnlyOneUniqueKey record where
 -- | Given a proxy for a 'PersistEntity' record, this returns the sole
 -- 'UniqueDef' for that entity.
 --
--- @since 2.10.0
+-- @since 2.13.0.0
 onlyOneUniqueDef
     :: (OnlyOneUniqueKey record, Monad proxy)
     => proxy record
     -> UniqueDef
 onlyOneUniqueDef prxy =
-    case entityUniques (entityDef prxy) of
+    case getEntityUniques (entityDef prxy) of
         [uniq] -> uniq
         _ -> error "impossible due to OnlyOneUniqueKey constraint"
 
@@ -352,7 +351,7 @@ atLeastOneUniqueDef
     => proxy record
     -> NonEmpty UniqueDef
 atLeastOneUniqueDef prxy =
-    case entityUniques (entityDef prxy) of
+    case getEntityUniques (entityDef prxy) of
         (x:xs) -> x :| xs
         _ ->
             error "impossible due to AtLeastOneUniqueKey record constraint"
@@ -419,10 +418,13 @@ insertBy val = do
 -- > +----+-------+-----+
 
 insertUniqueEntity
-    :: forall record backend m. (MonadIO m
-       ,PersistRecordBackend record backend
-       ,PersistUniqueWrite backend)
-    => record -> ReaderT backend m (Maybe (Entity record))
+    :: forall record backend m
+     . ( MonadIO m
+       , PersistRecordBackend record backend
+       , PersistUniqueWrite backend
+       )
+    => record
+    -> ReaderT backend m (Maybe (Entity record))
 insertUniqueEntity datum =
   fmap (\key -> Entity key datum) `liftM` insertUnique datum
 

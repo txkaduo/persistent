@@ -1,8 +1,8 @@
-{-# LANGUAGE BangPatterns, CPP #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE StandaloneDeriving, UndecidableInstances #-}
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 {-|
 This module defines the Persistent entity syntax used in the quasiquoter to generate persistent entities.
@@ -38,7 +38,7 @@ data TableName = TableName
 @
 
 As with the SQL generated, the specifics of this are customizable.
-See the @persistent-template@ package for details.
+See the "Database.Persist.TH" module for details.
 
 = Deriving
 
@@ -66,7 +66,7 @@ This will put a unique index on the @user@ table and the @name@ field.
 = Setting defaults
 
 You can use a @default=${sql expression}@ clause to set a default for a field.
-The thing following the `=` is interpreted as SQL that will be put directly into the table definition.
+The thing following the @=@ is interpreted as SQL that will be put directly into the table definition.
 
 @
 User
@@ -82,7 +82,7 @@ This creates a SQL definition like this:
 >   admin   BOOL DEFAULT=false
 > );
 
-A restriction here is that you still need to provide a value when performing an `insert`, because the generated Haskell type has the form:
+A restriction here is that you still need to provide a value when performing an @insert@, because the generated Haskell type has the form:
 
 @
 data User = User
@@ -92,6 +92,28 @@ data User = User
 @
 
 You can work around this by using a 'Maybe Bool' and supplying 'Nothing' by default.
+
+__Note__: Persistent determines whether or not to migrate a column's default
+value by comparing the exact string found in your @models@ file with the one
+returned by the database. If a database canonicalizes the SQL @FALSE@ from your
+@models@ file to @false@ in the database, Persistent will think the default
+value needs to be migrated and
+<https://github.com/yesodweb/persistent/issues/241 attempt a migration each time you start your app>.
+
+To workaround this, find the exact SQL your DBMS uses for the default value. For example, using postgres:
+
+@
+psql database_name # Open postgres
+
+\\d+ table_name -- describe the table schema
+@
+
+@
+...
+created       | timestamp without time zone | not null default now()
+@
+
+Then use the listed default value SQL inside your @models@ file.
 
 = Custom ID column
 
@@ -171,11 +193,145 @@ CREATE TABEL big_user_table (
 );
 @
 
-= Attributes
+= Customizing Types/Tables
+
+== JSON instances
+
+You can automatically get ToJSON and FromJSON instances for any entity by adding @json@ to the entity line:
+
+@
+Person json
+    name Text
+@
+Requires @\{\-\# LANGUAGE FlexibleInstances \#\-\}@
+
+Customizable by using mpsEntityJSON
+* http://hackage.haskell.org/package/persistent-template/docs/Database-Persist-TH.html#v:EntityJSON
+* http://hackage.haskell.org/package/persistent/docs/Database-Persist-Class.html#v:keyValueEntityToJSON
+
+== Changing table/collection name
+
+@
+Person sql=peoples
+    name Text
+@
+
+== Change table/collection key definition (field name and\/or type, persistent >= 2.1)
+
+@Id@ defines the column to use to define the key of the entity.
+Without type, the default backend key type will be used. You can change its
+database name using the @sql@ attributes :
+
+@
+Person
+   Id         sql=my_id_name
+   phone Text
+@
+
+With a Haskell type, the corresponding type is used. Note that you'll need to
+use @default=@ to tell it what to do on insertion.
+
+@
+Person
+   Id    Day default=CURRENT_DATE
+   phone Text
+@
+
+@default=@ works for SQL databases, and is backend specific.
+For MongoDB currently one always needs to create the key on the application
+side and use @insertKey@. @insert@ will not work correctly. Sql backends can
+also do this if default does not work.
+
+@sqltype@ can also be used to specify a different database type
+
+@
+Currency
+    Id String sqltype=varchar(3) sql=code
+@
+
+Composite key (using multiple columns) can also be defined using @Primary@.
+
+@sql=@ also works for setting the names of unique indexes.
+
+@
+Person
+  name Text
+  phone Text
+  UniquePersonPhone phone sql=UniqPerPhone
+@
+
+This makes a unique index requiring @phone@ to be unique across @Person@ rows.
+Ordinarily Persistent will generate a snake-case index name from the
+capitalized name provided such that @UniquePersonPhone@ becomes
+@unique_person_phone@. However, we provided a @sql=@ so the index name in the
+database will instead be @UniqPerPhone@. Keep in mind @sql=@ and @!@ attrs must
+come after the list of fields in front of the index name in the quasi-quoter.
+
+
+
+= Customizing Fields
+
+== Nullable Fields
+
+As illustrated in the example at the beginning of this page, we are able to represent nullable
+fields by including 'Maybe' at the end of the type declaration:
+
+> TableName
+>     fieldName      FieldType
+>     otherField     String
+>     nullableField  Int       Maybe
+
+Alternatively we can specify the keyword nullable:
+
+> TableName
+>     fieldName      FieldType
+>     otherField     String
+>     nullableField  Int       nullable
+
+However the difference here is in the first instance the Haskell type will be 'Maybe Int',
+but in the second it will be 'Int'. Be aware that this will cause runtime errors if the
+database returns @NULL@ and the @PersistField@ instance does not handle @PersistNull@.
+
+If you wish to define your Maybe types in a way that is similar to the actual Haskell
+definition, you can define 'Maybe Int' like so:
+
+> TableName
+>     fieldName      FieldType
+>     otherField     String
+>     nullableField  (Maybe Int)
+
+However, note, the field _must_ be enclosed in parenthesis.
+
+== @sqltype=@
+
+By default, Persistent maps the Haskell types you specify in the Models DSL to
+an appropriate SQL type in the database (refer to the section "Conversion table
+(migrations)" for the default mappings). Using the
+@sqltype=@ option, you can  customize the SQL type Persistent uses for your
+column. Use cases include:
+
+* Interacting with an existing database whose column types don't match Persistent's defaults.
+* Taking advantage of a specific SQL type's features
+    * e.g. Using an equivalent type that has better space or performance characteristics
+
+To use this setting, add the @sqltype=@ option after declaring your field name and type:
+
+@
+User
+    username Text sqltype=varchar(255)
+@
+
+== Laziness
+
+By default the records created by persistent have strict fields. You can prefix
+a field name with @~@ to make it lazy (or @!@ to make it strict).
+
+== Attributes
 
 The QuasiQuoter allows you to provide arbitrary attributes to an entity or field.
 This can be used to extend the code in ways that the library hasn't anticipated.
-If you use this feature, we'd definitely appreciate hearing about it and potentially supporting your use case directly!
+If you use this feature, we'd definitely appreciate hearing about it and
+potentially supporting your use case directly!
 
 @
 User !funny
@@ -196,6 +352,40 @@ userAttrs = do
 -- [["sad"],["sogood"]]
 @
 
+== @MigrationOnly@
+
+Introduced with @persistent-template@ 1.2.0. The purpose of this attribute is
+to mark a field which will be entirely ignored by the normal processing, but
+retained in the database definition for purposes of migration. This means, in
+SQL, a column will not be flagged for removal by the migration scripts, even
+though it is not used in your code. This is useful for phasing out usage of a
+column before entirely removing it, or having columns which are needed by other
+tools but not by Persistent.
+
+@
+Person
+    name Text
+    age Int
+    unusedField ByteString Maybe MigrationOnly
+@
+
+Note that you almost certainly want to either mark the field as @Maybe@ or
+provide a default value, otherwise insertions will fail.
+
+
+== @SafeToRemove@
+
+This is intended to be used as part of a deprecation of a field, after
+@MigrationOnly@ has been used usually. This works somewhat as a superset of the
+functionality of @MigrationOnly@. In addition, the field will be removed from
+the database if it is present. Note that this is a destructive change which you
+are marking as safe.
+
+== Constraints
+
+Migration will remove any manual constraints from your tables. Exception: constraints whose names begin with the string @__manual_@ (which starts with two underscores) will be preserved.
+
+
 = Foreign Keys
 
 If you define an entity and want to refer to it in another table, you can use the entity's Id type in a column directly.
@@ -212,6 +402,21 @@ Dog
 This automatically creates a foreign key reference from @Dog@ to @Person@.
 The foreign key constraint means that, if you have a @PersonId@ on the @Dog@, the database guarantees that the corresponding @Person@ exists in the database.
 If you try to delete a @Person@ out of the database that has a @Dog@, you'll receive an exception that a foreign key violation has occurred.
+
+== @constraint=@
+
+You can use the @constraint=@ attribute to override the constraint name used in
+migrations. This is useful particularly when the automatically generated
+constraint names exceed database limits (e.g. MySQL does not allow constraint
+names longer than 64 characters).
+
+@
+VeryLongTableName
+  name Text
+
+AnotherVeryLongTableName
+  veryLongTableNameId VeryLongTableNameId constraint=short_foreign_key
+@
 
 == OnUpdate and OnDelete
 
@@ -389,7 +594,7 @@ User
     age Int
 @
 
-The documentation is present on the `entityComments` field on the `EntityDef` for the entity:
+The documentation is present on the @entityComments@ field on the @EntityDef@ for the entity:
 
 @
 >>> let userDefinition = entityDef (Proxy :: Proxy User)
@@ -397,7 +602,7 @@ The documentation is present on the `entityComments` field on the `EntityDef` fo
 "I am a doc comment for a User. Users are important\nto the application, and should be treasured.\n"
 @
 
-Likewise, the field documentation is present in the `fieldComments` field on the `FieldDef` present in the `EntityDef`:
+Likewise, the field documentation is present in the @fieldComments@ field on the @FieldDef@ present in the @EntityDef@:
 
 @
 >>> let userFields = entityFields userDefinition
@@ -408,823 +613,357 @@ Likewise, the field documentation is present in the `fieldComments` field on the
 @
 
 Unfortunately, we can't use this to create Haddocks for you, because <https://gitlab.haskell.org/ghc/ghc/issues/5467 Template Haskell does not support Haddock yet>.
-`persistent` backends *can* use this to generate SQL @COMMENT@s, which are useful for a database perspective, and you can use the <https://hackage.haskell.org/package/persistent-documentation @persistent-documentation@> library to render a Markdown document of the entity definitions.
+@persistent@ backends *can* use this to generate SQL @COMMENT@s, which are useful for a database perspective, and you can use the <https://hackage.haskell.org/package/persistent-documentation @persistent-documentation@> library to render a Markdown document of the entity definitions.
 
+= Sum types
+
+== Field level
+
+You'll frequently want to store an enum of values in your database. For
+example, you might describe a @Person@'s employment status as being @Employed@,
+@Unemployed@, or @Retired@. In Haskell this is represented with a sum type, and
+Persistent provides a Template Haskell function to marshall these values to and
+from the database:
+
+@
+-- @Employment.hs
+{-# LANGUAGE TemplateHaskell #-}
+module Employment where
+
+import Database.Persist.TH
+import Prelude
+
+data Employment = Employed | Unemployed | Retired
+    deriving (Show, Read, Eq)
+derivePersistField "Employment"
+@
+
+@derivePersistField@ stores sum type values as strins in the database. While not as efficient as using integers, this approach simplifies adding and removing values from your enumeration.
+
+Due to the GHC Stage Restriction, the call to the Template Haskell function @derivePersistField@ must be in a separate module than where the generated code is used.
+
+Note: If you created a new module, make sure add it to the @exposed-modules@ section of your Cabal file.
+
+Use the module by importing it into your @Model.hs@ file:
+
+@
+-- @Model.hs
+import Employment
+@
+
+and use it in the @models@ DSL:
+
+@
+Person
+    employment Employment
+@
+
+You can export the Employment module from Import to use it across your app:
+
+@
+-- @Import.hs
+import Employment as Import
+@
+
+=== Entity-level
+
+The
+<https://github.com/yesodweb/persistent/blob/master/persistent-test/src/SumTypeTest.hs#L35 tests for this feature>
+demonstrate their usage. Note the use of the sign @+@ in front of the entity
+name.
+
+The schema in the test is reproduced here:
+
+@
+share [mkPersist persistSettings, mkMigrate "sumTypeMigrate"] [persistLowerCase|
+Bicycle
+    brand T.Text
+Car
+    make T.Text
+    model T.Text
++Vehicle
+    bicycle BicycleId
+    car CarId
+|]
+@
+
+Let's check out the definition of the Haskell type @Vehicle@.
+Using @ghci@, we can query for @:info Vehicle@:
+
+>>> :i Vehicle
+type Vehicle = VehicleGeneric SqlBackend
+        -- Defined at .../Projects/persistent/persistent-test/src/SumTypeTest.hs:26:1
+
+>>> :i VehicleGeneric
+type role VehicleGeneric nominal
+data VehicleGeneric backend
+  = VehicleBicycleSum (Key (BicycleGeneric backend))
+  | VehicleCarSum (Key (CarGeneric backend))
+        -- Defined at .../persistent/persistent-test/src/SumTypeTest.hs:26:1
+-- lots of instances follow...
+
+A @VehicleGeneric@ has two constructors:
+
+- @VehicleBicycleSum@ with a @Key (BicycleGeneric backend)@ field
+- @VehicleCarSum@ with a @Key (CarGeneric backend)@ field
+
+The @Bicycle@ and @Car@ are typical @persistent@ entities.
+
+This generates the following SQL migrations (formatted for readability):
+
+@
+CREATE TABLE "bicycle" (
+    "id"        INTEGER PRIMARY KEY,
+    "brand"     VARCHAR NOT NULL
+);
+
+CREATE TABLE "car"(
+    "id"        INTEGER PRIMARY KEY,
+    "make"      VARCHAR NOT NULL,
+    "model"     VARCHAR NOT NULL
+);
+
+CREATE TABLE "vehicle"(
+    "id"        INTEGER PRIMARY KEY,
+    "bicycle"   INTEGER NULL REFERENCES "bicycle",
+    "car"       INTEGER NULL REFERENCES "car"
+);
+@
+
+The @vehicle@ table contains a nullable foreign key reference to both the bicycle and the car tables.
+
+A SQL query that grabs all the vehicles from the database looks like this (note the @??@ is for the @persistent@ raw SQL query functions):
+
+@
+SELECT ??, ??, ??
+FROM vehicle
+LEFT JOIN car
+    ON vehicle.car = car.id
+LEFT JOIN bicycle
+    ON vehicle.bicycle = bicycle.id
+@
+
+If we use the above query with @rawSql@, we'd get the following result:
+
+@
+getVehicles
+    :: SqlPersistM
+        [ ( Entity Vehicle
+          , Maybe (Entity Bicycle)
+          , Maybe (Entity Car)
+          )
+        ]
+@
+
+This result has some post-conditions that are not guaranteed by the types *or* the schema.
+The constructor for @Entity Vehicle@ is going to determine which of the other members of the tuple is @Nothing@.
+We can convert this to a friendlier domain model like this:
+
+@
+data Vehicle'
+    = Car' Text Text
+    | Bike Text
+
+check = do
+    result <- getVehicles
+    pure (map convert result)
+
+convert
+    :: (Entity Vehicle, Maybe (Entity Bicycle), Maybe (Entity Car))
+    -> Vehicle'
+convert (Entity _ (VehicycleBicycleSum _), Just (Entity _ (Bicycle brand)), _) =
+    Bike brand
+convert (Entity _ (VehicycleCarSum _), _, Just (Entity _ (Car make model))) =
+    Car make model
+convert _ =
+    error "The database preconditions have been violated!"
+@
+
+== Times with timezones
+
+Storing times with timezones in one type in databases is not possible, although
+it seems that it should be possible (@timezone@ and @timezonetz@ in
+PostgreSQL). That's why starting with persistent 2.0, all times will be mapped
+to @UTCTime@. If you need to store timezone information along with times in a
+database, store the timezone in a second field. Here are some links about the
+topic with further information:
+
+* https://github.com/yesodweb/persistent/issues/290
+* https://groups.google.com/forum/#!msg/yesodweb/MIfcV2bwM80/8QLFpgp1LykJ
+* http://stackoverflow.com/questions/14615271/postgres-timestamp/14616640#14616640
+* http://justatheory.com/computers/databases/postgresql/use-timestamptz.html
+* https://github.com/lpsmith/postgresql-simple/issues/69
+* https://github.com/nikita-volkov/hasql-postgres/issues/1
+
+= Conversion table (migrations)
+
+Here are the conversions between Haskell types and database types:
+
++------------+----------------------+-------------------+---------------+----------------+
+| Haskell    | PostgreSQL           | MySQL             | MongoDB       |  SQLite        |
++============+======================+===================+===============+================+
+| Text       |  VARCHAR             |  TEXT             | String        |  VARCHAR       |
++------------+----------------------+-------------------+---------------+----------------+
+| ByteString |  BYTEA               |  BLOB             | BinData       |  BLOB          |
++------------+----------------------+-------------------+---------------+----------------+
+| Int        |  INT8                |  BIGINT(20)       | NumberLong    |  INTEGER       |
++------------+----------------------+-------------------+---------------+----------------+
+| Double     |  DOUBLE PRECISION    |  DOUBLE           | Double        |  REAL          |
++------------+----------------------+-------------------+---------------+----------------+
+| Rational   |  NUMERIC(22, 12)     |  DECIMAL(32,20)   | *Unsupported* |  NUMERIC(32,20)|
++------------+----------------------+-------------------+---------------+----------------+
+| Bool       |  BOOLEAN             |  TINYINT(1)       | Boolean       |  BOOLEAN       |
++------------+----------------------+-------------------+---------------+----------------+
+| Day        |  DATE                |  DATE             | NumberLong    |  DATE          |
++------------+----------------------+-------------------+---------------+----------------+
+| TimeOfDay  |  TIME                |  TIME\*\*         | *Unsupported* |  TIME          |
++------------+----------------------+-------------------+---------------+----------------+
+| UTCTime\*  |  TIMESTAMP           |  DATETIME\*\*     | Date          |  TIMESTAMP     |
++------------+----------------------+-------------------+---------------+----------------+
+
+Notes:
+
+\* Support for @ZonedTime@ was dropped in persistent 2.0. @UTCTime@ can be used
+with @timestamp without timezone@ and @timestamp with timezone@ in PostgreSQL.
+See also the section "Times with timezones".
+
+\*\* The default resolution for @TIME@ and @DATETIME@ in MySQL is one second.
+As of MySQL version 5.6.4, and persistent-mysql-2.6.2, fractional seconds are
+handled correctly if you declare an explicit precision by using @sqltype@. For
+example, appending @sqltype=TIME(6)@ to a @TimeOfDay@ field definition will
+give microsecond resolution.
+
+= Compatibility tables
+
+MySQL:
+
++-------------------+-----------------------------------------------------------------------+
+|Haskell type       | Compatible MySQL types                                                |
++===================+=======================================================================+
+| Bool              | Tiny                                                                  |
++-------------------+-----------------------------------------------------------------------+
+| Int8              | Tiny                                                                  |
++-------------------+-----------------------------------------------------------------------+
+| Int16             | Tiny,Short                                                            |
++-------------------+-----------------------------------------------------------------------+
+| Int32             | Tiny,Short,Int24,Long                                                 |
++-------------------+-----------------------------------------------------------------------+
+| Int               | Tiny,Short,Int24,Long,LongLong\*                                      |
++-------------------+-----------------------------------------------------------------------+
+| Int64             | Tiny,Short,Int24,Long,LongLong                                        |
++-------------------+-----------------------------------------------------------------------+
+| Integer           | Tiny,Short,Int24,Long,LongLong                                        |
++-------------------+-----------------------------------------------------------------------+
+| Word8             | Tiny                                                                  |
++-------------------+-----------------------------------------------------------------------+
+| Word16            | Tiny,Short                                                            |
++-------------------+-----------------------------------------------------------------------+
+| Word32            | Tiny,Short,Int24,Long                                                 |
++-------------------+-----------------------------------------------------------------------+
+| Word64            | Tiny,Short,Int24,Long,LongLong                                        |
+| Double            | Float,Double,Decimal,NewDecimal,Tiny,Short,Int24,Long                 |
++-------------------+-----------------------------------------------------------------------+
+| Ratio Integer     | Float,Double,Decimal,NewDecimal,Tiny,Short,Int24,Long,LongLong        |
++-------------------+-----------------------------------------------------------------------+
+| ByteString        | VarChar,TinyBlob,MediumBlob,LongBlob,Blob,VarString,String,Set,Enum   |
++-------------------+-----------------------------------------------------------------------+
+| Lazy.ByteString   | VarChar,TinyBlob,MediumBlob,LongBlob,Blob,VarString,String,Set,Enum   |
++-------------------+-----------------------------------------------------------------------+
+| Encoding.Text\*\* | VarChar,TinyBlob,MediumBlob,LongBlob,Blob,VarString,String,Set,Enum   |
++-------------------+-----------------------------------------------------------------------+
+| Lazy.Text         | VarChar,TinyBlob,MediumBlob,LongBlob,Blob,VarString,String,Set,Enum   |
++-------------------+-----------------------------------------------------------------------+
+| [Char]/String     | VarChar,TinyBlob,MediumBlob,LongBlob,Blob,VarString,String,Set,Enum   |
++-------------------+-----------------------------------------------------------------------+
+| UTCTime           | DateTime,Timestamp                                                    |
++-------------------+-----------------------------------------------------------------------+
+| Day               | Year,Date,NewDate                                                     |
++-------------------+-----------------------------------------------------------------------+
+| TimeOfDay         | Time                                                                  |
++-------------------+-----------------------------------------------------------------------+
+
+\* When @Word@ size is 64bit
+
+\*\* Utf8 only
+
+Unsupported types:
+
++--------------------------------------------------------------------+
+| Not currently supported                                            |
++====================================================================+
+| Word                                                               |
++--------------------------------------------------------------------+
+| Float                                                              |
++--------------------------------------------------------------------+
+| Scientific <https://github.com/yesodweb/persistent/issues/225 #225>|
++--------------------------------------------------------------------+
+
+See <http://hackage.haskell.org/package/mysql-simple/docs/Database-MySQL-Simple-Result.html MySQL.Simple.Result>.
 -}
 module Database.Persist.Quasi
     ( parse
-    , PersistSettings (..)
+    -- * 'PersistSettings'
+    , PersistSettings
     , upperCaseSettings
     , lowerCaseSettings
-    , nullable
-#if TEST
-    , Token (..)
-    , Line' (..)
-    , preparse
-    , tokenize
-    , parseFieldType
-    , empty
-    , removeSpaces
-    , associateLines
-    , skipEmpty
-    , LinesWithComments(..)
-    , splitExtras
-    , takeColsEx
-#endif
+    -- ** Getters and Setters
+    , module Database.Persist.Quasi
     ) where
 
-import Prelude hiding (lines)
-
-import Control.Applicative hiding (empty)
-import Control.Arrow ((&&&))
-import Control.Monad (msum, mplus)
-import Data.Char
-import Data.List (find, foldl')
-import qualified Data.List.NonEmpty as NEL
-import Data.List.NonEmpty (NonEmpty(..))
-import qualified Data.Map as M
-import Data.Maybe (mapMaybe, fromMaybe, maybeToList, listToMaybe)
-import Data.Monoid (mappend)
 import Data.Text (Text)
-import qualified Data.Text as T
-import Database.Persist.Types
-import Text.Read (readEither)
-
-data ParseState a = PSDone | PSFail String | PSSuccess a Text deriving Show
-
-parseFieldType :: Text -> Either String FieldType
-parseFieldType t0 =
-    case parseApplyFT t0 of
-        PSSuccess ft t'
-            | T.all isSpace t' -> Right ft
-        PSFail err -> Left $ "PSFail " ++ err
-        other -> Left $ show other
-  where
-    parseApplyFT t =
-        case goMany id t of
-            PSSuccess (ft:fts) t' -> PSSuccess (foldl' FTApp ft fts) t'
-            PSSuccess [] _ -> PSFail "empty"
-            PSFail err -> PSFail err
-            PSDone -> PSDone
-
-    parseEnclosed :: Char -> (FieldType -> FieldType) -> Text -> ParseState FieldType
-    parseEnclosed end ftMod t =
-      let (a, b) = T.break (== end) t
-      in case parseApplyFT a of
-          PSSuccess ft t' -> case (T.dropWhile isSpace t', T.uncons b) of
-              ("", Just (c, t'')) | c == end -> PSSuccess (ftMod ft) (t'' `Data.Monoid.mappend` t')
-              (x, y) -> PSFail $ show (b, x, y)
-          x -> PSFail $ show x
-
-    parse1 t =
-        case T.uncons t of
-            Nothing -> PSDone
-            Just (c, t')
-                | isSpace c -> parse1 $ T.dropWhile isSpace t'
-                | c == '(' -> parseEnclosed ')' id t'
-                | c == '[' -> parseEnclosed ']' FTList t'
-                | isUpper c ->
-                    let (a, b) = T.break (\x -> isSpace x || x `elem` ("()[]"::String)) t
-                     in PSSuccess (getCon a) b
-                | otherwise -> PSFail $ show (c, t')
-    getCon t =
-        case T.breakOnEnd "." t of
-            (_, "") -> FTTypeCon Nothing t
-            ("", _) -> FTTypeCon Nothing t
-            (a, b) -> FTTypeCon (Just $ T.init a) b
-    goMany front t =
-        case parse1 t of
-            PSSuccess x t' -> goMany (front . (x:)) t'
-            PSFail err -> PSFail err
-            PSDone -> PSSuccess (front []) t
-            -- _ ->
-
-data PersistSettings = PersistSettings
-    { psToDBName :: !(Text -> Text)
-    , psStrictFields :: !Bool
-    -- ^ Whether fields are by default strict. Default value: @True@.
-    --
-    -- @since 1.2
-    , psIdName :: !Text
-    -- ^ The name of the id column. Default value: @id@
-    -- The name of the id column can also be changed on a per-model basis
-    -- <https://github.com/yesodweb/persistent/wiki/Persistent-entity-syntax>
-    --
-    -- @since 2.0
-    }
-
-defaultPersistSettings, upperCaseSettings, lowerCaseSettings :: PersistSettings
-defaultPersistSettings = PersistSettings
-    { psToDBName = id
-    , psStrictFields = True
-    , psIdName       = "id"
-    }
-
-upperCaseSettings = defaultPersistSettings
-
-lowerCaseSettings = defaultPersistSettings
-    { psToDBName =
-        let go c
-                | isUpper c = T.pack ['_', toLower c]
-                | otherwise = T.singleton c
-         in T.dropWhile (== '_') . T.concatMap go
-    }
-
--- | Parses a quasi-quoted syntax into a list of entity definitions.
-parse :: PersistSettings -> Text -> [EntityDef]
-parse ps = parseLines ps . preparse
-
-preparse :: Text -> [Line]
-preparse =
-    removeSpaces
-        . filter (not . empty)
-        . map tokenize
-        . T.lines
-
--- | A token used by the parser.
-data Token = Spaces !Int   -- ^ @Spaces n@ are @n@ consecutive spaces.
-           | Token Text    -- ^ @Token tok@ is token @tok@ already unquoted.
-           | DocComment Text -- ^ @DocComment@ is a documentation comment, unmodified.
-  deriving (Show, Eq)
-
--- | Tokenize a string.
-tokenize :: Text -> [Token]
-tokenize t
-    | T.null t = []
-    | "-- | " `T.isPrefixOf` t = [DocComment t]
-    | "--" `T.isPrefixOf` t = [] -- Comment until the end of the line.
-    | "#" `T.isPrefixOf` t = [] -- Also comment to the end of the line, needed for a CPP bug (#110)
-    | T.head t == '"' = quotes (T.tail t) id
-    | T.head t == '(' = parens 1 (T.tail t) id
-    | isSpace (T.head t) =
-        let (spaces, rest) = T.span isSpace t
-         in Spaces (T.length spaces) : tokenize rest
-
-    -- support mid-token quotes and parens
-    | Just (beforeEquals, afterEquals) <- findMidToken t
-    , not (T.any isSpace beforeEquals)
-    , Token next : rest <- tokenize afterEquals =
-        Token (T.concat [beforeEquals, "=", next]) : rest
-
-    | otherwise =
-        let (token, rest) = T.break isSpace t
-         in Token token : tokenize rest
-  where
-    findMidToken t' =
-        case T.break (== '=') t' of
-            (x, T.drop 1 -> y)
-                | "\"" `T.isPrefixOf` y || "(" `T.isPrefixOf` y -> Just (x, y)
-            _ -> Nothing
-
-    quotes t' front
-        | T.null t' = error $ T.unpack $ T.concat $
-            "Unterminated quoted string starting with " : front []
-        | T.head t' == '"' = Token (T.concat $ front []) : tokenize (T.tail t')
-        | T.head t' == '\\' && T.length t' > 1 =
-            quotes (T.drop 2 t') (front . (T.take 1 (T.drop 1 t'):))
-        | otherwise =
-            let (x, y) = T.break (`elem` ['\\','\"']) t'
-             in quotes y (front . (x:))
-    parens count t' front
-        | T.null t' = error $ T.unpack $ T.concat $
-            "Unterminated parens string starting with " : front []
-        | T.head t' == ')' =
-            if count == (1 :: Int)
-                then Token (T.concat $ front []) : tokenize (T.tail t')
-                else parens (count - 1) (T.tail t') (front . (")":))
-        | T.head t' == '(' =
-            parens (count + 1) (T.tail t') (front . ("(":))
-        | T.head t' == '\\' && T.length t' > 1 =
-            parens count (T.drop 2 t') (front . (T.take 1 (T.drop 1 t'):))
-        | otherwise =
-            let (x, y) = T.break (`elem` ['\\','(',')']) t'
-             in parens count y (front . (x:))
-
--- | A string of tokens is empty when it has only spaces.  There
--- can't be two consecutive 'Spaces', so this takes /O(1)/ time.
-empty :: [Token] -> Bool
-empty []         = True
-empty [Spaces _] = True
-empty _          = False
-
--- | A line.  We don't care about spaces in the middle of the
--- line.  Also, we don't care about the ammount of indentation.
-data Line' f
-    = Line
-    { lineIndent   :: Int
-    , tokens       :: f Text
-    }
-
-deriving instance Show (f Text) => Show (Line' f)
-deriving instance Eq (f Text) => Eq (Line' f)
-
-mapLine :: (forall x. f x -> g x) -> Line' f -> Line' g
-mapLine k (Line i t) = Line i (k t)
-
-traverseLine :: Functor t => (forall x. f x -> t (g x)) -> Line' f -> t (Line' g)
-traverseLine k (Line i xs) = Line i <$> k xs
-
-type Line = Line' []
-
--- | Remove leading spaces and remove spaces in the middle of the
--- tokens.
-removeSpaces :: [[Token]] -> [Line]
-removeSpaces =
-    map toLine
-  where
-    toLine (Spaces i:rest) = toLine' i rest
-    toLine xs              = toLine' 0 xs
-
-    toLine' i = Line i . mapMaybe fromToken
-
-    fromToken (Token t) = Just t
-    fromToken (DocComment t) = Just t
-    fromToken Spaces{}  = Nothing
-
--- | Divide lines into blocks and make entity definitions.
-parseLines :: PersistSettings -> [Line] -> [EntityDef]
-parseLines ps lines =
-    fixForeignKeysAll $ toEnts lines
-  where
-    toEnts :: [Line] -> [UnboundEntityDef]
-    toEnts =
-        map mk
-        . associateLines
-        . skipEmpty
-    mk :: LinesWithComments -> UnboundEntityDef
-    mk lwc =
-        let Line _ (name :| entAttribs) :| rest = lwcLines lwc
-         in setComments (lwcComments lwc) $ mkEntityDef ps name entAttribs (map (mapLine NEL.toList) rest)
-
-isComment :: Text -> Maybe Text
-isComment xs =
-    T.stripPrefix "-- | " xs
-
-data LinesWithComments = LinesWithComments
-    { lwcLines :: NonEmpty (Line' NonEmpty)
-    , lwcComments :: [Text]
-    } deriving (Eq, Show)
-
--- TODO: drop this and use <> when 8.2 isn't supported anymore so the
--- monoid/semigroup nonsense isn't annoying
-appendLwc :: LinesWithComments -> LinesWithComments -> LinesWithComments
-appendLwc a b =
-    LinesWithComments (foldr NEL.cons (lwcLines b) (lwcLines a)) (lwcComments a `mappend` lwcComments b)
-
-newLine :: Line' NonEmpty -> LinesWithComments
-newLine l = LinesWithComments (pure l) []
-
-firstLine :: LinesWithComments -> Line' NonEmpty
-firstLine = NEL.head . lwcLines
-
-consLine :: Line' NonEmpty -> LinesWithComments -> LinesWithComments
-consLine l lwc = lwc { lwcLines = NEL.cons l (lwcLines lwc) }
-
-consComment :: Text -> LinesWithComments -> LinesWithComments
-consComment l lwc = lwc { lwcComments = l : lwcComments lwc }
-
-associateLines :: [Line' NonEmpty] -> [LinesWithComments]
-associateLines lines =
-    foldr combine [] $
-    foldr toLinesWithComments [] lines
-  where
-    toLinesWithComments line linesWithComments =
-        case linesWithComments of
-            [] ->
-                [newLine line]
-            (lwc : lwcs) ->
-                case isComment (NEL.head (tokens line)) of
-                    Just comment
-                        | lineIndent line == lowestIndent ->
-                        consComment comment lwc : lwcs
-                    _ ->
-                        if lineIndent line <= lineIndent (firstLine lwc)
-                            && lineIndent (firstLine lwc) /= lowestIndent
-                        then
-                            consLine line lwc : lwcs
-                        else
-                            newLine line : lwc : lwcs
-
-    lowestIndent = minimum . fmap lineIndent $ lines
-    combine :: LinesWithComments -> [LinesWithComments] -> [LinesWithComments]
-    combine lwc [] =
-        [lwc]
-    combine lwc (lwc' : lwcs) =
-        let minIndent = minimumIndentOf lwc
-            otherIndent = minimumIndentOf lwc'
-         in
-            if minIndent < otherIndent then
-                appendLwc lwc lwc' : lwcs
-            else
-                lwc : lwc' : lwcs
-
-
-    minimumIndentOf = minimum . fmap lineIndent . lwcLines
-
-skipEmpty :: [Line' []] -> [Line' NonEmpty]
-skipEmpty = mapMaybe (traverseLine NEL.nonEmpty)
-
-setComments :: [Text] -> UnboundEntityDef -> UnboundEntityDef
-setComments [] = id
-setComments comments =
-    overUnboundEntityDef (\ed -> ed { entityComments = Just (T.unlines comments) })
-
-fixForeignKeysAll :: [UnboundEntityDef] -> [EntityDef]
-fixForeignKeysAll unEnts = map fixForeignKeys unEnts
-  where
-    ents = map unboundEntityDef unEnts
-    entLookup = M.fromList $ map (\e -> (entityHaskell e, e)) ents
-
-    fixForeignKeys :: UnboundEntityDef -> EntityDef
-    fixForeignKeys (UnboundEntityDef foreigns ent) =
-      ent { entityForeigns = map (fixForeignKey ent) foreigns }
-
-    -- check the count and the sqltypes match and update the foreignFields with the names of the referenced columns
-    fixForeignKey :: EntityDef -> UnboundForeignDef -> ForeignDef
-    fixForeignKey ent (UnboundForeignDef foreignFieldTexts parentFieldTexts fdef) =
-        case mfdefs of
-             Just fdefs ->
-                 if length foreignFieldTexts /= length fdefs
-                 then
-                     lengthError fdefs
-                 else
-                     let
-                         fds_ffs =
-                             zipWith toForeignFields
-                                 foreignFieldTexts
-                                 fdefs
-                         dbname =
-                             unDBName (entityDB pent)
-                         oldDbName =
-                             unDBName (foreignRefTableDBName fdef)
-                      in fdef
-                         { foreignFields = map snd fds_ffs
-                         , foreignNullable = setNull $ map fst fds_ffs
-                         , foreignRefTableDBName =
-                             DBName dbname
-                         , foreignConstraintNameDBName =
-                             DBName
-                             . T.replace oldDbName dbname . unDBName
-                             $ foreignConstraintNameDBName fdef
-                         }
-             Nothing ->
-                 error $ "no primary key found fdef="++show fdef++ " ent="++show ent
-      where
-        pentError =
-            error $ "could not find table " ++ show (foreignRefTableHaskell fdef)
-            ++ " fdef=" ++ show fdef ++ " allnames="
-            ++ show (map (unHaskellName . entityHaskell . unboundEntityDef) unEnts)
-            ++ "\n\nents=" ++ show ents
-        pent =
-            fromMaybe pentError $ M.lookup (foreignRefTableHaskell fdef) entLookup
-        mfdefs = case parentFieldTexts of
-            [] -> entitiesPrimary pent
-            _  -> Just $ map (getFd pent . HaskellName) parentFieldTexts
-
-        setNull :: [FieldDef] -> Bool
-        setNull [] = error "setNull: impossible!"
-        setNull (fd:fds) = let nullSetting = isNull fd in
-          if all ((nullSetting ==) . isNull) fds then nullSetting
-            else error $ "foreign key columns must all be nullable or non-nullable"
-                   ++ show (map (unHaskellName . fieldHaskell) (fd:fds))
-        isNull = (NotNullable /=) . nullable . fieldAttrs
-
-        toForeignFields :: Text -> FieldDef
-            -> (FieldDef, (ForeignFieldDef, ForeignFieldDef))
-        toForeignFields fieldText pfd =
-           case chktypes fd haskellField pfd of
-               Just err -> error err
-               Nothing -> (fd, ((haskellField, fieldDB fd), (pfh, pfdb)))
-          where
-            fd = getFd ent haskellField
-
-            haskellField = HaskellName fieldText
-            (pfh, pfdb) = (fieldHaskell pfd, fieldDB pfd)
-
-            chktypes ffld _fkey pfld =
-                if fieldType ffld == fieldType pfld then Nothing
-                  else Just $ "fieldType mismatch: " ++ show (fieldType ffld) ++ ", " ++ show (fieldType pfld)
-
-        getFd :: EntityDef -> HaskellName -> FieldDef
-        getFd entity t = go (keyAndEntityFields entity)
-          where
-            go [] = error $ "foreign key constraint for: " ++ show (unHaskellName $ entityHaskell entity)
-                       ++ " unknown column: " ++ show t
-            go (f:fs)
-                | fieldHaskell f == t = f
-                | otherwise = go fs
-
-        lengthError pdef = error $ "found " ++ show (length foreignFieldTexts) ++ " fkeys and " ++ show (length pdef) ++ " pkeys: fdef=" ++ show fdef ++ " pdef=" ++ show pdef
-
-
-data UnboundEntityDef = UnboundEntityDef
-                        { _unboundForeignDefs :: [UnboundForeignDef]
-                        , unboundEntityDef :: EntityDef
-                        }
-
-overUnboundEntityDef
-    :: (EntityDef -> EntityDef) -> UnboundEntityDef -> UnboundEntityDef
-overUnboundEntityDef f ubed =
-    ubed { unboundEntityDef = f (unboundEntityDef ubed) }
-
-lookupKeyVal :: Text -> [Text] -> Maybe Text
-lookupKeyVal key = lookupPrefix $ key `mappend` "="
-
-lookupPrefix :: Text -> [Text] -> Maybe Text
-lookupPrefix prefix = msum . map (T.stripPrefix prefix)
-
--- | Construct an entity definition.
-mkEntityDef :: PersistSettings
-            -> Text -- ^ name
-            -> [Attr] -- ^ entity attributes
-            -> [Line] -- ^ indented lines
-            -> UnboundEntityDef
-mkEntityDef ps name entattribs lines =
-  UnboundEntityDef foreigns $
-    EntityDef
-        { entityHaskell = HaskellName name'
-        , entityDB = DBName $ getDbName ps name' entattribs
-        -- idField is the user-specified Id
-        -- otherwise useAutoIdField
-        -- but, adjust it if the user specified a Primary
-        , entityId = setComposite primaryComposite $ fromMaybe autoIdField idField
-        , entityAttrs = entattribs
-        , entityFields = cols
-        , entityUniques = uniqs
-        , entityForeigns = []
-        , entityDerives = concat $ mapMaybe takeDerives attribs
-        , entityExtra = extras
-        , entitySum = isSum
-        , entityComments = Nothing
-        }
-  where
-    entName = HaskellName name'
-    (isSum, name') =
-        case T.uncons name of
-            Just ('+', x) -> (True, x)
-            _ -> (False, name)
-    (attribs, extras) = splitExtras lines
-
-    attribPrefix = flip lookupKeyVal entattribs
-    idName | Just _ <- attribPrefix "id" = error "id= is deprecated, ad a field named 'Id' and use sql="
-           | otherwise = Nothing
-
-    (idField, primaryComposite, uniqs, foreigns) = foldl' (\(mid, mp, us, fs) attr ->
-        let (i, p, u, f) = takeConstraint ps name' cols attr
-            squish xs m = xs `mappend` maybeToList m
-        in (just1 mid i, just1 mp p, squish us u, squish fs f)) (Nothing, Nothing, [],[]) attribs
-
-    cols :: [FieldDef]
-    cols = reverse . fst . foldr k ([], []) $ reverse attribs
-    k x (!acc, !comments) =
-        case isComment =<< listToMaybe x of
-            Just comment ->
-                (acc, comment : comments)
-            Nothing ->
-                ( maybe id (:) (setFieldComments comments <$> takeColsEx ps x) acc
-                , []
-                )
-    setFieldComments [] x = x
-    setFieldComments xs fld =
-        fld { fieldComments = Just (T.unlines xs) }
-
-    autoIdField = mkAutoIdField ps entName (DBName `fmap` idName) idSqlType
-    idSqlType = maybe SqlInt64 (const $ SqlOther "Primary Key") primaryComposite
-
-    setComposite Nothing fd = fd
-    setComposite (Just c) fd = fd
-        { fieldReference = CompositeRef c
-        }
-
-
-just1 :: (Show x) => Maybe x -> Maybe x -> Maybe x
-just1 (Just x) (Just y) = error $ "expected only one of: "
-  `mappend` show x `mappend` " " `mappend` show y
-just1 x y = x `mplus` y
-
-mkAutoIdField :: PersistSettings -> HaskellName -> Maybe DBName -> SqlType -> FieldDef
-mkAutoIdField ps entName idName idSqlType =
-    FieldDef
-        { fieldHaskell = HaskellName "Id"
-        -- this should be modeled as a Maybe
-        -- but that sucks for non-ID field
-        -- TODO: use a sumtype FieldDef | IdFieldDef
-        , fieldDB = fromMaybe (DBName $ psIdName ps) idName
-        , fieldType = FTTypeCon Nothing $ keyConName $ unHaskellName entName
-        , fieldSqlType = idSqlType
-        -- the primary field is actually a reference to the entity
-        , fieldReference = ForeignRef entName defaultReferenceTypeCon
-        , fieldAttrs = []
-        , fieldStrict = True
-        , fieldComments = Nothing
-        , fieldCascade = noCascade
-        , fieldGenerated = Nothing
-        }
-
-defaultReferenceTypeCon :: FieldType
-defaultReferenceTypeCon = FTTypeCon (Just "Data.Int") "Int64"
-
-keyConName :: Text -> Text
-keyConName entName = entName `mappend` "Id"
-
-splitExtras
-    :: [Line]
-    -> ( [[Text]]
-       , M.Map Text [[Text]]
-       )
-splitExtras [] = ([], M.empty)
-splitExtras (Line indent [name]:rest)
-    | not (T.null name) && isUpper (T.head name) =
-        let (children, rest') = span ((> indent) . lineIndent) rest
-            (x, y) = splitExtras rest'
-         in (x, M.insert name (map tokens children) y)
-splitExtras (Line _ ts:rest) =
-    let (x, y) = splitExtras rest
-     in (ts:x, y)
-
-takeColsEx :: PersistSettings -> [Text] -> Maybe FieldDef
-takeColsEx =
-    takeCols
-        (\ft perr -> error $ "Invalid field type " ++ show ft ++ " " ++ perr)
-
-takeCols
-    :: (Text -> String -> Maybe FieldDef)
-    -> PersistSettings
-    -> [Text]
-    -> Maybe FieldDef
-takeCols _ _ ("deriving":_) = Nothing
-takeCols onErr ps (n':typ:rest')
-    | not (T.null n) && isLower (T.head n) =
-        case parseFieldType typ of
-            Left err -> onErr typ err
-            Right ft -> Just FieldDef
-                { fieldHaskell = HaskellName n
-                , fieldDB = DBName $ getDbName ps n attrs_
-                , fieldType = ft
-                , fieldSqlType = SqlOther $ "SqlType unset for " `mappend` n
-                , fieldAttrs = fieldAttrs_
-                , fieldStrict = fromMaybe (psStrictFields ps) mstrict
-                , fieldReference = NoReference
-                , fieldComments = Nothing
-                , fieldCascade = cascade_
-                , fieldGenerated = generated_
-                }
-  where
-    fieldAttrs_ = parseFieldAttrs attrs_
-    generated_ = parseGenerated attrs_
-    (cascade_, attrs_) = parseCascade rest'
-    (mstrict, n)
-        | Just x <- T.stripPrefix "!" n' = (Just True, x)
-        | Just x <- T.stripPrefix "~" n' = (Just False, x)
-        | otherwise = (Nothing, n')
-
-takeCols _ _ _ = Nothing
-
-parseGenerated :: [Text] -> Maybe Text
-parseGenerated = foldl' (\acc x -> acc <|> T.stripPrefix "generated=" x) Nothing
-
-getDbName :: PersistSettings -> Text -> [Text] -> Text
-getDbName ps n [] = psToDBName ps n
-getDbName ps n (a:as) = fromMaybe (getDbName ps n as) $ T.stripPrefix "sql=" a
-
-takeConstraint :: PersistSettings
-          -> Text
-          -> [FieldDef]
-          -> [Text]
-          -> (Maybe FieldDef, Maybe CompositeDef, Maybe UniqueDef, Maybe UnboundForeignDef)
-takeConstraint ps tableName defs (n:rest) | not (T.null n) && isUpper (T.head n) = takeConstraint'
-    where
-      takeConstraint'
-            | n == "Unique"  = (Nothing, Nothing, Just $ takeUniq ps tableName defs rest, Nothing)
-            | n == "Foreign" = (Nothing, Nothing, Nothing, Just $ takeForeign ps tableName defs rest)
-            | n == "Primary" = (Nothing, Just $ takeComposite defs rest, Nothing, Nothing)
-            | n == "Id"      = (Just $ takeId ps tableName (n:rest), Nothing, Nothing, Nothing)
-            | otherwise      = (Nothing, Nothing, Just $ takeUniq ps "" defs (n:rest), Nothing) -- retain compatibility with original unique constraint
-takeConstraint _ _ _ _ = (Nothing, Nothing, Nothing, Nothing)
-
--- TODO: this is hacky (the double takeCols, the setFieldDef stuff, and setIdName.
--- need to re-work takeCols function
-takeId :: PersistSettings -> Text -> [Text] -> FieldDef
-takeId ps tableName (n:rest) =
-    setFieldDef
-    $ fromMaybe (error "takeId: impossible!")
-    $ takeCols (\_ _ -> addDefaultIdType) ps (field:rest) -- `mappend` setIdName)
-  where
-    field = case T.uncons n of
-        Nothing -> error "takeId: empty field"
-        Just (f, ield) -> toLower f `T.cons` ield
-    addDefaultIdType = takeColsEx ps (field : keyCon : rest ) -- `mappend` setIdName)
-    setFieldDef fd = fd
-        { fieldReference =
-            ForeignRef (HaskellName tableName) $
-                if fieldType fd == FTTypeCon Nothing keyCon
-                then defaultReferenceTypeCon
-                else fieldType fd
-        }
-    keyCon = keyConName tableName
-    -- this will be ignored if there is already an existing sql=
-    -- TODO: I think there is a ! ignore syntax that would screw this up
-    -- setIdName = ["sql=" `mappend` psIdName ps]
-takeId _ tableName _ = error $ "empty Id field for " `mappend` show tableName
-
-
-takeComposite
-    :: [FieldDef]
-    -> [Text]
-    -> CompositeDef
-takeComposite fields pkcols =
-    CompositeDef (map (getDef fields) pkcols) attrs
-  where
-    (_, attrs) = break ("!" `T.isPrefixOf`) pkcols
-    getDef [] t = error $ "Unknown column in primary key constraint: " ++ show t
-    getDef (d:ds) t
-        | fieldHaskell d == HaskellName t =
-            if nullable (fieldAttrs d) /= NotNullable
-                then error $ "primary key column cannot be nullable: " ++ show t ++ show fields
-                else d
-        | otherwise = getDef ds t
-
--- Unique UppercaseConstraintName list of lowercasefields terminated
--- by ! or sql= such that a unique constraint can look like:
--- `UniqueTestNull fieldA fieldB sql=ConstraintNameInDatabase !force`
--- Here using sql= sets the name of the constraint.
-takeUniq :: PersistSettings
-         -> Text
-         -> [FieldDef]
-         -> [Text]
-         -> UniqueDef
-takeUniq ps tableName defs (n:rest)
-    | not (T.null n) && isUpper (T.head n)
-        = UniqueDef
-            (HaskellName n)
-            dbName
-            (map (HaskellName &&& getDBName defs) fields)
-            attrs
-  where
-    isAttr a =
-      "!" `T.isPrefixOf` a
-    isSqlName a =
-      "sql=" `T.isPrefixOf` a
-    isNonField a =
-       isAttr a
-      || isSqlName a
-    (fields, nonFields) =
-      break isNonField rest
-    attrs = filter isAttr nonFields
-    usualDbName =
-      DBName $ psToDBName ps (tableName `T.append` n)
-    sqlName :: Maybe DBName
-    sqlName =
-      case find isSqlName nonFields of
-        Nothing ->
-          Nothing
-        (Just t) ->
-          case drop 1 $ T.splitOn "=" t of
-            (x : _) -> Just (DBName x)
-            _ -> Nothing
-    dbName = fromMaybe usualDbName sqlName
-    getDBName [] t =
-      error $ "Unknown column in unique constraint: " ++ show t
-              ++ " " ++ show defs ++ show n ++ " " ++ show attrs
-    getDBName (d:ds) t
-        | fieldHaskell d == HaskellName t = fieldDB d
-        | otherwise = getDBName ds t
-takeUniq _ tableName _ xs =
-  error $ "invalid unique constraint on table["
-          ++ show tableName
-          ++ "] expecting an uppercase constraint name xs="
-          ++ show xs
-
-data UnboundForeignDef = UnboundForeignDef
-                         { _unboundForeignFields :: [Text] -- ^ fields in the parent entity
-                         , _unboundParentFields :: [Text] -- ^ fields in parent entity
-                         , _unboundForeignDef :: ForeignDef
-                         }
-
-takeForeign
-    :: PersistSettings
-    -> Text
-    -> [FieldDef]
-    -> [Text]
-    -> UnboundForeignDef
-takeForeign ps tableName _defs = takeRefTable
-  where
-    errorPrefix :: String
-    errorPrefix = "invalid foreign key constraint on table[" ++ show tableName ++ "] "
-
-    takeRefTable :: [Text] -> UnboundForeignDef
-    takeRefTable [] = error $ errorPrefix ++ " expecting foreign table name"
-    takeRefTable (refTableName:restLine) = go restLine Nothing Nothing
-      where
-        go :: [Text] -> Maybe CascadeAction -> Maybe CascadeAction -> UnboundForeignDef
-        go (n:rest) onDelete onUpdate | not (T.null n) && isLower (T.head n)
-            = UnboundForeignDef fFields pFields $ ForeignDef
-                { foreignRefTableHaskell =
-                    HaskellName refTableName
-                , foreignRefTableDBName =
-                    DBName $ psToDBName ps refTableName
-                , foreignConstraintNameHaskell =
-                    HaskellName n
-                , foreignConstraintNameDBName =
-                    DBName $ psToDBName ps (tableName `T.append` n)
-                , foreignFieldCascade = FieldCascade
-                    { fcOnDelete = onDelete
-                    , fcOnUpdate = onUpdate
-                    }
-                , foreignFields =
-                    []
-                , foreignAttrs =
-                    attrs
-                , foreignNullable =
-                    False
-                , foreignToPrimary =
-                    null pFields
-                }
-          where
-            (fields,attrs) = break ("!" `T.isPrefixOf`) rest
-            (fFields, pFields) = case break (== "References") fields of
-                (ffs, []) -> (ffs, [])
-                (ffs, _ : pfs) -> case (length ffs, length pfs) of
-                    (flen, plen) | flen == plen -> (ffs, pfs)
-                    (flen, plen) -> error $ errorPrefix ++ concat
-                        [ "Found ", show flen, " foreign fields but "
-                        , show plen, " parent fields" ]
-
-        go ((parseCascadeAction CascadeDelete -> Just cascadingAction) : rest) onDelete' onUpdate =
-            case onDelete' of
-                Nothing ->
-                    go rest (Just cascadingAction) onUpdate
-                Just _ ->
-                    error $ errorPrefix ++ "found more than one OnDelete actions"
-
-        go ((parseCascadeAction CascadeUpdate -> Just cascadingAction) : rest) onDelete onUpdate' =
-            case onUpdate' of
-                Nothing ->
-                    go rest onDelete (Just cascadingAction)
-                Just _ ->
-                    error $ errorPrefix ++ "found more than one OnUpdate actions"
-
-        go xs _ _ = error $ errorPrefix ++ "expecting a lower case constraint name or a cascading action xs=" ++ show xs
-
-data CascadePrefix = CascadeUpdate | CascadeDelete
-
-parseCascade :: [Text] -> (FieldCascade, [Text])
-parseCascade allTokens =
-    go [] Nothing Nothing allTokens
-  where
-    go acc mupd mdel tokens_ =
-        case tokens_ of
-            [] ->
-                ( FieldCascade
-                    { fcOnDelete = mdel
-                    , fcOnUpdate = mupd
-                    }
-                , acc
-                )
-            this : rest ->
-                case parseCascadeAction CascadeUpdate this of
-                    Just cascUpd ->
-                        case mupd of
-                            Nothing ->
-                                go acc (Just cascUpd) mdel rest
-                            Just _ ->
-                                nope "found more than one OnUpdate action"
-                    Nothing ->
-                        case parseCascadeAction CascadeDelete this of
-                            Just cascDel ->
-                                case mdel of
-                                    Nothing ->
-                                        go acc mupd (Just cascDel) rest
-                                    Just _ ->
-                                        nope "found more than one OnDelete action: "
-                            Nothing ->
-                                go (this : acc) mupd mdel rest
-    nope msg =
-        error $ msg <> ", tokens: " <> show allTokens
-
-parseCascadeAction
-    :: CascadePrefix
-    -> Text
-    -> Maybe CascadeAction
-parseCascadeAction prfx text = do
-    cascadeStr <- T.stripPrefix ("On" <> toPrefix prfx) text
-    case readEither (T.unpack cascadeStr) of
-        Right a ->
-            Just a
-        Left _ ->
-            Nothing
-  where
-    toPrefix cp =
-        case cp of
-            CascadeUpdate -> "Update"
-            CascadeDelete -> "Delete"
-
-takeDerives :: [Text] -> Maybe [Text]
-takeDerives ("deriving":rest) = Just rest
-takeDerives _ = Nothing
-
-nullable :: [FieldAttr] -> IsNullable
-nullable s
-    | FieldAttrMaybe    `elem` s = Nullable ByMaybeAttr
-    | FieldAttrNullable `elem` s = Nullable ByNullableAttr
-    | otherwise = NotNullable
+import Database.Persist.Names
+import Database.Persist.Quasi.Internal
+
+-- | Retrieve the function in the 'PersistSettings' that modifies the names into
+-- database names.
+--
+-- @since 2.13.0.0
+getPsToDBName :: PersistSettings -> Text -> Text
+getPsToDBName = psToDBName
+
+-- | Set the name modification function that translates the QuasiQuoted names
+-- for use in the database.
+--
+-- @since 2.13.0.0
+setPsToDBName :: (Text -> Text) -> PersistSettings -> PersistSettings
+setPsToDBName f ps = ps { psToDBName = f }
+
+-- | Set a custom function used to create the constraint name
+-- for a foreign key.
+--
+-- @since 2.13.0.0
+setPsToFKName :: (EntityNameHS -> ConstraintNameHS -> Text) -> PersistSettings -> PersistSettings
+setPsToFKName setter ps = ps { psToFKName = setter }
+
+-- | A preset configuration function that puts an underscore
+-- between the entity name and the constraint name when
+-- creating a foreign key constraint name
+--
+-- @since 2.13.0.0
+setPsUseSnakeCaseForiegnKeys :: PersistSettings -> PersistSettings
+setPsUseSnakeCaseForiegnKeys = setPsToFKName (toFKNameInfixed "_")
+
+-- | Retrieve whether or not the 'PersistSettings' will generate code with
+-- strict fields.
+--
+-- @since 2.13.0.0
+getPsStrictFields :: PersistSettings -> Bool
+getPsStrictFields = psStrictFields
+
+-- | Set whether or not the 'PersistSettings' will make fields strict.
+--
+-- @since 2.13.0.0
+setPsStrictFields :: Bool -> PersistSettings -> PersistSettings
+setPsStrictFields a ps = ps { psStrictFields = a }
+
+-- | Retrieve the default name of the @id@ column.
+--
+-- @since 2.13.0.0
+getPsIdName :: PersistSettings -> Text
+getPsIdName = psIdName
+
+-- | Set the default name of the @id@ column.
+--
+-- @since 2.13.0.0
+setPsIdName :: Text -> PersistSettings -> PersistSettings
+setPsIdName n ps = ps { psIdName = n }

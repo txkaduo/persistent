@@ -1,28 +1,29 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE DataKinds, FlexibleInstances #-}
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 import PgInit
 
 import Data.Aeson
 import qualified Data.ByteString as BS
-import Data.IntMap (IntMap)
 import Data.Fixed
+import Data.IntMap (IntMap)
 import qualified Data.Text as T
 import Data.Time
 import Test.QuickCheck
 
 import qualified ArrayAggTest
 import qualified CompositeTest
-import qualified ForeignKey
+import qualified CustomConstraintTest
 import qualified CustomPersistFieldTest
 import qualified CustomPrimaryKeyReferenceTest
 import qualified DataTypeTest
@@ -30,17 +31,24 @@ import qualified EmbedOrderTest
 import qualified EmbedTest
 import qualified EmptyEntityTest
 import qualified EquivalentTypeTestPostgres
+import qualified ForeignKey
+import qualified GeneratedColumnTestSQL
 import qualified HtmlTest
+import qualified ImplicitUuidSpec
 import qualified JSONTest
 import qualified LargeNumberTest
+import qualified LongIdentifierTest
 import qualified MaxLenTest
+import qualified MaybeFieldDefsTest
 import qualified MigrationColumnLengthTest
-import qualified MigrationTest
 import qualified MigrationOnlyTest
-import qualified MpsNoPrefixTest
+import qualified MigrationReferenceSpec
+import qualified MigrationTest
 import qualified MpsCustomPrefixTest
-import qualified PersistentTest
+import qualified MpsNoPrefixTest
 import qualified PersistUniqueTest
+import qualified PersistentTest
+import qualified PgIntervalTest
 import qualified PrimaryTest
 import qualified RawSqlTest
 import qualified ReadWriteTest
@@ -51,10 +59,8 @@ import qualified TransactionLevelTest
 import qualified TreeTest
 import qualified UniqueTest
 import qualified UpsertTest
-import qualified CustomConstraintTest
-import qualified LongIdentifierTest
+import qualified UpsertWhere
 import qualified PgIntervalTest
-import qualified GeneratedColumnTestSQL
 
 type Tuple = (,)
 
@@ -114,6 +120,7 @@ main = do
       , LargeNumberTest.numberMigrate
       , UniqueTest.uniqueMigrate
       , MaxLenTest.maxlenMigrate
+      , MaybeFieldDefsTest.maybeFieldDefMigrate
       , Recursive.recursiveMigrate
       , CompositeTest.compositeMigrate
       , TreeTest.treeMigrate
@@ -128,73 +135,79 @@ main = do
       , ForeignKey.compositeMigrate
       , MigrationTest.migrationMigrate
       , PgIntervalTest.pgIntervalMigrate
+      , UpsertWhere.upsertWhereMigrate
+      , ImplicitUuidSpec.implicitUuidMigrate
       ]
     PersistentTest.cleanDB
     ForeignKey.cleanDB
 
   hspec $ do
-    RenameTest.specsWith runConnAssert
-    DataTypeTest.specsWith runConnAssert
-        (Just (runMigrationSilent dataTypeMigrate))
-        [ TestFn "text" dataTypeTableText
-        , TestFn "textMaxLen" dataTypeTableTextMaxLen
-        , TestFn "bytes" dataTypeTableBytes
-        , TestFn "bytesTextTuple" dataTypeTableBytesTextTuple
-        , TestFn "bytesMaxLen" dataTypeTableBytesMaxLen
-        , TestFn "int" dataTypeTableInt
-        , TestFn "intList" dataTypeTableIntList
-        , TestFn "intMap" dataTypeTableIntMap
-        , TestFn "bool" dataTypeTableBool
-        , TestFn "day" dataTypeTableDay
-        , TestFn "time" (DataTypeTest.roundTime . dataTypeTableTime)
-        , TestFn "utc" (DataTypeTest.roundUTCTime . dataTypeTableUtc)
-        , TestFn "jsonb" dataTypeTableJsonb
-        ]
-        [ ("pico", dataTypeTablePico) ]
-        dataTypeTableDouble
-    HtmlTest.specsWith
-        runConnAssert
-        (Just (runMigrationSilent HtmlTest.htmlMigrate))
+      ImplicitUuidSpec.spec
+      MigrationReferenceSpec.spec
+      RenameTest.specsWith runConnAssert
+      DataTypeTest.specsWith runConnAssert
+          (Just (runMigrationSilent dataTypeMigrate))
+          [ TestFn "text" dataTypeTableText
+          , TestFn "textMaxLen" dataTypeTableTextMaxLen
+          , TestFn "bytes" dataTypeTableBytes
+          , TestFn "bytesTextTuple" dataTypeTableBytesTextTuple
+          , TestFn "bytesMaxLen" dataTypeTableBytesMaxLen
+          , TestFn "int" dataTypeTableInt
+          , TestFn "intList" dataTypeTableIntList
+          , TestFn "intMap" dataTypeTableIntMap
+          , TestFn "bool" dataTypeTableBool
+          , TestFn "day" dataTypeTableDay
+          , TestFn "time" (DataTypeTest.roundTime . dataTypeTableTime)
+          , TestFn "utc" (DataTypeTest.roundUTCTime . dataTypeTableUtc)
+          , TestFn "jsonb" dataTypeTableJsonb
+          ]
+          [ ("pico", dataTypeTablePico) ]
+          dataTypeTableDouble
+      HtmlTest.specsWith
+          runConnAssert
+          (Just (runMigrationSilent HtmlTest.htmlMigrate))
 
-    EmbedTest.specsWith runConnAssert
-    EmbedOrderTest.specsWith runConnAssert
-    LargeNumberTest.specsWith runConnAssert
-    ForeignKey.specsWith runConnAssert
-    UniqueTest.specsWith runConnAssert
-    MaxLenTest.specsWith runConnAssert
-    Recursive.specsWith runConnAssert
-    SumTypeTest.specsWith runConnAssert (Just (runMigrationSilent SumTypeTest.sumTypeMigrate))
-    MigrationTest.specsWith runConnAssert
-    MigrationOnlyTest.specsWith runConnAssert
+      EmbedTest.specsWith runConnAssert
+      EmbedOrderTest.specsWith runConnAssert
+      LargeNumberTest.specsWith runConnAssert
+      ForeignKey.specsWith runConnAssert
+      UniqueTest.specsWith runConnAssert
+      MaxLenTest.specsWith runConnAssert
+      MaybeFieldDefsTest.specsWith runConnAssert
+      Recursive.specsWith runConnAssert
+      SumTypeTest.specsWith runConnAssert (Just (runMigrationSilent SumTypeTest.sumTypeMigrate))
+      MigrationTest.specsWith runConnAssert
+      MigrationOnlyTest.specsWith runConnAssert
 
-        (Just
-            $ runMigrationSilent MigrationOnlyTest.migrateAll1
-            >> runMigrationSilent MigrationOnlyTest.migrateAll2
-        )
-    PersistentTest.specsWith runConnAssert
-    ReadWriteTest.specsWith runConnAssert
-    PersistentTest.filterOrSpecs runConnAssert
-    RawSqlTest.specsWith runConnAssert
-    UpsertTest.specsWith
-        runConnAssert
-        UpsertTest.Don'tUpdateNull
-        UpsertTest.UpsertPreserveOldKey
+          (Just
+              $ runMigrationSilent MigrationOnlyTest.migrateAll1
+              >> runMigrationSilent MigrationOnlyTest.migrateAll2
+          )
+      PersistentTest.specsWith runConnAssert
+      ReadWriteTest.specsWith runConnAssert
+      PersistentTest.filterOrSpecs runConnAssert
+      RawSqlTest.specsWith runConnAssert
+      UpsertTest.specsWith
+          runConnAssert
+          UpsertTest.Don'tUpdateNull
+          UpsertTest.UpsertPreserveOldKey
 
-    MpsNoPrefixTest.specsWith runConnAssert
-    MpsCustomPrefixTest.specsWith runConnAssert
-    EmptyEntityTest.specsWith runConnAssert (Just (runMigrationSilent EmptyEntityTest.migration))
-    CompositeTest.specsWith runConnAssert
-    TreeTest.specsWith runConnAssert
-    PersistUniqueTest.specsWith runConnAssert
-    PrimaryTest.specsWith runConnAssert
-    CustomPersistFieldTest.specsWith runConnAssert
-    CustomPrimaryKeyReferenceTest.specsWith runConnAssert
-    MigrationColumnLengthTest.specsWith runConnAssert
-    EquivalentTypeTestPostgres.specs
-    TransactionLevelTest.specsWith runConnAssert
-    LongIdentifierTest.specsWith runConnAssertUseConf -- Have at least one test use the conf variant of connecting to Postgres, to improve test coverage.
-    JSONTest.specs
-    CustomConstraintTest.specs
-    PgIntervalTest.specs
-    ArrayAggTest.specs
-    GeneratedColumnTestSQL.specsWith runConnAssert
+      MpsNoPrefixTest.specsWith runConnAssert
+      MpsCustomPrefixTest.specsWith runConnAssert
+      EmptyEntityTest.specsWith runConnAssert (Just (runMigrationSilent EmptyEntityTest.migration))
+      CompositeTest.specsWith runConnAssert
+      TreeTest.specsWith runConnAssert
+      PersistUniqueTest.specsWith runConnAssert
+      PrimaryTest.specsWith runConnAssert
+      CustomPersistFieldTest.specsWith runConnAssert
+      CustomPrimaryKeyReferenceTest.specsWith runConnAssert
+      MigrationColumnLengthTest.specsWith runConnAssert
+      EquivalentTypeTestPostgres.specs
+      TransactionLevelTest.specsWith runConnAssert
+      LongIdentifierTest.specsWith runConnAssertUseConf -- Have at least one test use the conf variant of connecting to Postgres, to improve test coverage.
+      JSONTest.specs
+      CustomConstraintTest.specs
+      UpsertWhere.specs
+      PgIntervalTest.specs
+      ArrayAggTest.specs
+      GeneratedColumnTestSQL.specsWith runConnAssert

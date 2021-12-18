@@ -1,10 +1,11 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE TypeOperators, FlexibleInstances #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE DataKinds #-}
 
 module Database.Persist.Sql.Class
     ( RawSql (..)
@@ -13,23 +14,23 @@ module Database.Persist.Sql.Class
     , unPrefix
     ) where
 
-import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Data.Bits (bitSizeMaybe)
 import Data.ByteString (ByteString)
 import Data.Fixed
+import Data.Foldable (toList)
 import Data.Int
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
-import Data.Monoid ((<>))
 import Data.Proxy (Proxy(..))
 import qualified Data.Set as S
 import Data.Text (Text, intercalate, pack)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
-import Data.Time (UTCTime, TimeOfDay, Day)
+import Data.Time (Day, TimeOfDay, UTCTime)
 import qualified Data.Vector as V
 import Data.Word
+import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Text.Blaze.Html (Html)
 
 import Database.Persist
@@ -41,7 +42,7 @@ import Database.Persist.Sql.Types
 class RawSql a where
     -- | Number of columns that this data type needs and the list
     -- of substitutions for @SELECT@ placeholders @??@.
-    rawSqlCols :: (DBName -> Text) -> a -> (Int, [Text])
+    rawSqlCols :: (Text -> Text) -> a -> (Int, [Text])
 
     -- | A string telling the user why the column count is what
     -- it is.
@@ -66,27 +67,42 @@ instance
     rawSqlProcessRow         = keyFromValues
 
 instance
-    (PersistEntity record, PersistEntityBackend record ~ backend, IsPersistBackend backend) =>
-    RawSql (Entity record) where
-    rawSqlCols escape _ent = (length sqlFields, [intercalate ", " sqlFields])
-        where
-          sqlFields = map (((name <> ".") <>) . escape)
-              $ map fieldDB
-              -- Hacky for a composite key because
-              -- it selects the same field multiple times
-              $ entityKeyFields entDef ++ entityFields entDef
-          name = escape (entityDB entDef)
-          entDef = entityDef (Nothing :: Maybe record)
+    (PersistEntity record, PersistEntityBackend record ~ backend, IsPersistBackend backend)
+  =>
+    RawSql (Entity record)
+  where
+    rawSqlCols escape _ent = (length sqlFields, [intercalate ", " $ toList sqlFields])
+      where
+        sqlFields =
+            fmap (((name <> ".") <>) . escapeWith escape)
+            $ fmap fieldDB
+            $ keyAndEntityFields entDef
+        name =
+            escapeWith escape (getEntityDBName entDef)
+        entDef =
+            entityDef (Nothing :: Maybe record)
     rawSqlColCountReason a =
         case fst (rawSqlCols (error "RawSql") a) of
           1 -> "one column for an 'Entity' data type without fields"
-          n -> show n ++ " columns for an 'Entity' data type"
-    rawSqlProcessRow row = case splitAt nKeyFields row of
-      (rowKey, rowVal) -> Entity <$> keyFromValues rowKey
-                                 <*> fromPersistValues rowVal
-      where
-        nKeyFields = length $ entityKeyFields entDef
-        entDef = entityDef (Nothing :: Maybe record)
+          n -> show n <> " columns for an 'Entity' data type"
+    rawSqlProcessRow row =
+        case keyFromRecordM of
+            Just mkKey -> do
+                val <- fromPersistValues row
+                pure Entity
+                    { entityKey =
+                        mkKey val
+                    , entityVal =
+                        val
+                    }
+            Nothing ->
+                case row of
+                    (k : rest) ->
+                        Entity
+                            <$> keyFromValues [k]
+                            <*> fromPersistValues rest
+                    [] ->
+                        Left "Row was empty"
 
 -- | This newtype wrapper is useful when selecting an entity out of the
 -- database and you want to provide a prefix to the table being selected.
@@ -134,7 +150,7 @@ newtype EntityWithPrefix (prefix :: Symbol) record
 --
 -- @
 -- myQuery :: 'SqlPersistM' ['Entity' Person]
--- myQuery = map (unPrefix @\"p\") <$> rawSql query []
+-- myQuery = fmap (unPrefix @\"p\") <$> rawSql query []
 --   where
 --     query = "SELECT ?? FROM person AS p"
 -- @
@@ -149,25 +165,34 @@ instance
     , PersistEntityBackend record ~ backend
     , IsPersistBackend backend
     )
-  => RawSql (EntityWithPrefix prefix record) where
-    rawSqlCols escape _ent = (length sqlFields, [intercalate ", " sqlFields])
-        where
-          sqlFields = map (((name <> ".") <>) . escape)
-              $ map fieldDB
+  =>
+    RawSql (EntityWithPrefix prefix record)
+  where
+    rawSqlCols escape _ent = (length sqlFields, [intercalate ", " $ toList sqlFields])
+      where
+          sqlFields =
+              fmap (((name <> ".") <>) . escapeWith escape)
+              $ fmap fieldDB
               -- Hacky for a composite key because
               -- it selects the same field multiple times
-              $ entityKeyFields entDef ++ entityFields entDef
-          name = pack $ symbolVal (Proxy :: Proxy prefix)
-          entDef = entityDef (Nothing :: Maybe record)
+              $ keyAndEntityFields entDef
+          name =
+              pack $ symbolVal (Proxy :: Proxy prefix)
+          entDef =
+              entityDef (Nothing :: Maybe record)
     rawSqlColCountReason a =
         case fst (rawSqlCols (error "RawSql") a) of
-          1 -> "one column for an 'Entity' data type without fields"
-          n -> show n ++ " columns for an 'Entity' data type"
-    rawSqlProcessRow row = case splitAt nKeyFields row of
-      (rowKey, rowVal) -> fmap EntityWithPrefix $ Entity <$> keyFromValues rowKey
-                                 <*> fromPersistValues rowVal
+            1 -> "one column for an 'Entity' data type without fields"
+            n -> show n ++ " columns for an 'Entity' data type"
+    rawSqlProcessRow row =
+        case splitAt nKeyFields row of
+            (rowKey, rowVal) ->
+                fmap EntityWithPrefix $
+                    Entity
+                        <$> keyFromValues rowKey
+                        <*> fromPersistValues rowVal
       where
-        nKeyFields = length $ entityKeyFields entDef
+        nKeyFields = length $ getEntityKeyFields entDef
         entDef = entityDef (Nothing :: Maybe record)
 
 -- | @since 1.0.1
@@ -1135,12 +1160,12 @@ extractMaybe = fromMaybe (error "Database.Persist.GenericSql.extractMaybe")
 -- @
 -- import qualified Data.UUID as UUID
 -- instance 'PersistField' UUID where
---   'toPersistValue' = 'PersistDbSpecific' . toASCIIBytes
---   'fromPersistValue' ('PersistDbSpecific' uuid) =
+--   'toPersistValue' = 'PersistLiteralEncoded' . toASCIIBytes
+--   'fromPersistValue' ('PersistLiteralEncoded' uuid) =
 --     case fromASCIIBytes uuid of
 --       'Nothing' -> 'Left' $ "Model/CustomTypes.hs: Failed to deserialize a UUID; received: " <> T.pack (show uuid)
 --       'Just' uuid' -> 'Right' uuid'
---   'fromPersistValue' x = Left $ "File.hs: When trying to deserialize a UUID: expected PersistDbSpecific, received: "-- >  <> T.pack (show x)
+--   'fromPersistValue' x = Left $ "File.hs: When trying to deserialize a UUID: expected PersistLiteralEncoded, received: "-- >  <> T.pack (show x)
 --
 -- instance 'PersistFieldSql' UUID where
 --   'sqlType' _ = 'SqlOther' "uuid"
@@ -1212,6 +1237,8 @@ instance PersistFieldSql TimeOfDay where
     sqlType _ = SqlTime
 instance PersistFieldSql UTCTime where
     sqlType _ = SqlDayTime
+instance PersistFieldSql a => PersistFieldSql (Maybe a) where
+    sqlType _ = sqlType (Proxy :: Proxy a)
 instance {-# OVERLAPPABLE #-} PersistFieldSql a => PersistFieldSql [a] where
     sqlType _ = SqlString
 instance PersistFieldSql a => PersistFieldSql (V.Vector a) where

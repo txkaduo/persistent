@@ -1,5 +1,28 @@
 # Changelog for persistent-sqlite
 
+## 2.13.0.3
+
+* Somehow failed to properly release the safe-to-remove changes.
+
+## 2.13.0.2
+
+* [#1275](https://github.com/yesodweb/persistent/pull/1275)
+    * Fix SafeToRemove
+
+## 2.13.0.1
+
+* [#1265](https://github.com/yesodweb/persistent/pull/1265)
+    * Support GHC 9
+
+## 2.13.0.0
+
+* [#1225](https://github.com/yesodweb/persistent/pull/1225)
+    * Support `persistent-2.13` changes for SqlBackend being made internal.
+
+## 2.12.0.0
+
+* Decomposed `HaskellName` into `ConstraintNameHS`, `EntityNameHS`, `FieldNameHS`. Decomposed `DBName` into `ConstraintNameDB`, `EntityNameDB`, `FieldNameDB` respectively. [#1174](https://github.com/yesodweb/persistent/pull/1174)
+
 ##  2.11.1.0
 
 * Add `checkForeignKeys` operation to verify no foreign key constraints are
@@ -36,7 +59,6 @@
 * Add `createRawSqlitePoolFromInfo`, `createRawSqlitePoolFromInfo_`,
   `withRawSqlitePoolInfo`, and `withRawSqlitePoolInfo_` to match the existing
   pool functions for regular `SqlBackend`. [#983](https://github.com/yesodweb/persistent/pull/983)
->>>>>>> master
 
 ## 2.10.5.2
 

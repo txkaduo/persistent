@@ -1,5 +1,53 @@
 # Changelog for persistent-postgresql
 
+## 2.13.2.0
+* [#1316](https://github.com/yesodweb/persistent/pull/1316)
+  * Expose some internals in the new `Database.Persist.Postgresql.Internal` module.
+    This gives access to the `P` newtype, which is used for de-serializing `PersistValue`s
+    from `postgresql-simple` code.
+
+## 2.13.1.0
+
+* [#1305](https://github.com/yesodweb/persistent/pull/1305)
+  * Add `RawPostgresql` wrapper, which exposes the underlying Postgres connection used
+    to construct a `SqlBackend`.
+
+## 2.13.0.3
+
+* [#1290](https://github.com/yesodweb/persistent/pull/1290)
+    * Fix the code path for adding references to previously defined columns.
+
+## 2.13.0.2
+
+* Actually release the SafeTORemove fix
+
+## 2.13.0.1
+
+* [#1275](https://github.com/yesodweb/persistent/pull/1275)
+    * Fix `SafeToRemove`
+
+## 2.13.0.0
+
+* [#1225](https://github.com/yesodweb/persistent/pull/1225)
+    * Support `persistent-2.13.0.0` making SQlBackend internal
+
+# 2.12.1.1
+
+* [#1235](https://github.com/yesodweb/persistent/pull/1235)
+    * `upsertWhere` and `upsertManyWhere` only worked in cases where a `Primary`
+      key was defined on a record, and no other uniqueness constraints. They
+      have been fixed to only work with records that have a single Uniqueness
+      constraint defined.
+
+## 2.12.1.0
+
+* Added `upsertWhere` and `upsertManyWhere` to `persistent-postgresql`.  [#1222](https://github.com/yesodweb/persistent/pull/1222).
+
+## 2.12.0.0
+
+* Decomposed `HaskellName` into `ConstraintNameHS`, `EntityNameHS`, `FieldNameHS`. Decomposed `DBName` into `ConstraintNameDB`, `EntityNameDB`, `FieldNameDB` respectively. [#1174](https://github.com/yesodweb/persistent/pull/1174)
+* Fix XML conversion [#1192](https://github.com/yesodweb/persistent/pull/1192)
+
 ##  2.11.0.1
 * Fix foreign key migrations [#1167] https://github.com/yesodweb/persistent/pull/1167
   * Fix a bug where a foreign key of a field to its table was ignored.

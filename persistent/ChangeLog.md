@@ -1,7 +1,217 @@
 # Changelog for persistent
 
-## 2.11.0.2
+## 2.13.2.1
 
+* [#1329](https://github.com/yesodweb/persistent/pull/1329)
+    * Prevent discovery of constrained `PersistEntity` instances in
+      `discoverEntities` (since the discovered instances won't work without
+      constraints anyway).
+
+## 2.13.2.0
+
+* [#1314](https://github.com/yesodweb/persistent/pull/1314)
+    * Fix typos and minor documentation issues in Database.Persist and
+      Database.Persist.Quasi.
+* [#1317](https://github.com/yesodweb/persistent/pull/1317)
+    * Expose `orderClause` from the Persistent internals, which allows users
+      to produce well-formatted `ORDER BY` clauses.
+
+* [#1319](https://github.com/yesodweb/persistent/pull/1319)
+    * Add a `Num` instance for `OverflowNatural`
+
+## 2.13.1.2
+
+* [#1308](https://github.com/yesodweb/persistent/pull/1308)
+    * Consolidate the documentation for the Persistent quasiquoter in
+      Database.Persist.Quasi.
+* [#1312](https://github.com/yesodweb/persistent/pull/1312)
+    * Reorganize documentation and link to more modules.
+    * Expose `Database.Persist.Sql.Migration`
+
+## 2.13.1.1
+
+* [#1294](https://github.com/yesodweb/persistent/pull/1294)
+    * Fix an issue where documentation comments on fields are in reverse line
+      order.
+
+## 2.13.1.0
+
+* [#1264](https://github.com/yesodweb/persistent/pull/1264)
+    * Support declaring Maybe before the type in model definitions
+
+## 2.13.0.4
+
+* [#1277](https://github.com/yesodweb/persistent/pull/1277)
+    * Corrected the documentation of `addMigration` to match the actual
+      behaviour - this will not change the behaviour of your code.
+
+## 2.13.0.3
+
+* [#1287](https://github.com/yesodweb/persistent/pull/1287)
+    * Fix the duplicate entity check for transitive dependencies.
+    * Fixes an issue where generating code would refer to the `ModelName` when
+      making a reference to another table when the explicit code only refers to
+      `ModelNameId`.
+
+## 2.13.0.2
+
+* [#1265](https://github.com/yesodweb/persistent/pull/1265)
+    * Support GHC 9
+
+## 2.13.0.1
+
+* [#1268](https://github.com/yesodweb/persistent/pull/1268)
+    * Show `keyFromValues` error
+
+## 2.13.0.0
+
+* [#1244](https://github.com/yesodweb/persistent/pull/1244)
+    * Implement config for customising the FK name
+* [#1252](https://github.com/yesodweb/persistent/pull/1252)
+    * `mkMigrate` now defers to `mkEntityDefList` and `migrateModels` instead of
+      fixing the foreign key references itself.
+    * `mkSave` was deprecated - the function did not fix foreign key references.
+      Please use `mkEntityDefList` instead.
+    * `EntityDef` will now include fields marked `MigrationOnly` and
+      `SafeToRemove`. Beforehand, those were filtered out, and `mkMigrate`
+      applied. The function `getEntityFields` will only return fields defined on
+      the Haskell type - for all columns, see `getEntityFieldsDatabase`.
+* [#1225](https://github.com/yesodweb/persistent/pull/1225)
+    * The fields and constructor for `SqlBackend` are no longer exported by
+      default. They are available from an internal module,
+      `Database.Persist.Sql.Types.Internal`. Breaking changes from `Internal`
+      modules are not reflected in the major version. This will allow us to
+      release new functionality without breaking your code. It's recommended to
+      switch to using the smart constructor functions and setter functions that
+      are now exported from `Database.Persist.Sql` instead.
+    * A new API is available for constructing and using a `SqlBackend`, provided
+      in `Database.Persist.SqlBackend`. Instead of using the `SqlBackend`
+      directly, use `mkSqlBackend` and the datatype `MkSqlBackendArgs`. The
+      `MkSqlBackendArgs` record has the same field names as the `SqlBackend`, so
+      the translation is easy:
+
+        ```diff
+        - SqlBackend
+        + mkSqlBackend MkSqlBackendArgs
+            { connInsertSql = ...
+            , connCommit = ...
+            , connEscapeFieldName = ...
+            , connEscapeTableName = ...
+            , etc
+            }
+        ```
+
+      Some fields were omitted in `MkSqlBackendArgs`. These fields are
+      *optional* - they provide enhanced or backend-specific functionality. For
+      these, use the setter functions like `setConnUpsertSql`.
+    * Previously hidden modules are now exposed under the `Internal` namespace.
+    * The `connLimitOffset` function used to have a `Bool` parameter. This
+      parameter is unused and has been removed.
+* [#1234](https://github.com/yesodweb/persistent/pull/1234)
+    * You can now customize the default implied ID column. See the documentation
+      in `Database.Persist.ImplicitIdDef` for more details.
+    * Moved the various `Name` types into `Database.Persist.Names`
+    * Removed the `hasCompositeKey` function. See `hasCompositePrimaryKey` and
+      `hasNaturalKey` as replacements.
+    * The `EntityDef` constructor and field labels are not exported by default.
+      Get those from `Database.Persist.EntityDef.Internal`, but you should
+      migrate to the getters/setters in `Database.Persist.EntityDef` as you can.
+    * Added the `Database.Persist.FieldDef` and
+      `Database.Persist.FieldDef.Internal` modules.
+    * The `PersistSettings` type was made abstract. Please migrate to the
+      getters/setters defined in that `Database.Persist.Quasi`, or use
+      `Database.Persist.Quasi.Internal` if you don't mind the possibility of
+      breaking changes.
+    * Add the `runSqlCommand` function for running arbitrary SQL during
+      migrations.
+    * Add `migrateModels` function for a TH-free migration facility.
+* [#1253](https://github.com/yesodweb/persistent/pull/1253)
+    * Add `discoverEntities` to discover instances of the class and return their
+      entity definitions.
+* [#1250](https://github.com/yesodweb/persistent/pull/1250)
+    * The `mpsGeneric` function has been deprecated. If you need this
+      functionality, please comment with your needs on the GitHub issue tracker.
+      We may un-deprecate it, or we may provide a new and better means of
+      facilitating a solution to your problem.
+* [#1255](https://github.com/yesodweb/persistent/pull/1255)
+    * `mkPersist` now checks to see if an instance already exists for
+      `PersistEntity` for the inputs.
+* [#1256](https://github.com/yesodweb/persistent/pull/1256)
+    * The QuasiQuoter has been refactored and improved.
+    * You can now use `mkPersistWith` to pass in a list of pre-existing
+      `EntityDef` to improve foreign key detection and splitting up models
+      across multiple modules.
+    * The `entityId` field now returns an `EntityIdDef`, which specifies what
+      the ID field actually is. This is a move to better support natural keys.
+    * Several types that had lists have been refactored to use nonempty lists to
+      better capture the semantics.
+    * `mkDeleteCascade` is deprecated. Please use the Cascade behavior directly
+      on fields.
+    * You can use `Key Foo` and `FooId` interchangeably in fields.
+    * Support for GHC < 8.4 dropped.
+
+## 2.12.1.2
+
+* [#1258](https://github.com/yesodweb/persistent/pull/1258)
+    * Support promoted types in Quasi Quoter
+* [#1243](https://github.com/yesodweb/persistent/pull/1243)
+    * Assorted cleanup of TH module
+* [#1242](https://github.com/yesodweb/persistent/pull/1242)
+    * Refactor setEmbedField to use do notation
+* [#1237](https://github.com/yesodweb/persistent/pull/1237)
+    * Remove nonEmptyOrFail function from recent tests
+
+## 2.12.1.1
+
+* [#1231](https://github.com/yesodweb/persistent/pull/1231)
+    * Simplify Line type in Quasi module, always use NonEmpty
+* [#1229](https://github.com/yesodweb/persistent/pull/1229)
+    * The `#id` labels are now generated for entities.
+
+## 2.12.1.0
+
+* [#1218](https://github.com/yesodweb/persistent/pull/1218)
+    * Refactoring name generating functions in TH
+* [#1226](https://github.com/yesodweb/persistent/pull/1226)
+    * Expose the `filterClause` and `filterClauseWithValues` functions to support
+      the `upsertWhere` functionality in `persistent-postgresql`.
+
+## 2.12.0.2
+
+* [#1123](https://github.com/yesodweb/persistent/pull/1223)
+    * Fix JSON encoding for `PersistValue`
+
+## 2.12.0.1
+
+* Refactoring token parsing in quasi module [#1206](https://github.com/yesodweb/persistent/pull/1206)
+* Removing duplication from TH output [#1202](https://github.com/yesodweb/persistent/pull/1202)
+* Refactor [] to NonEmpty in Quasi module [#1193](https://github.com/yesodweb/persistent/pull/1193)
+* [#1162](https://github.com/yesodweb/persistent/pull/1162)
+  * Replace `askLogFunc` with `askLoggerIO`
+* Decomposed `HaskellName` into `ConstraintNameHS`, `EntityNameHS`, `FieldNameHS`. Decomposed `DBName` into `ConstraintNameDB`, `EntityNameDB`, `FieldNameDB` respectively. [#1174](https://github.com/yesodweb/persistent/pull/1174)
+* Use `resourcet-pool` to break out some `Data.Pool` logic [#1163](https://github.com/yesodweb/persistent/pull/1163)
+* [#1178](https://github.com/yesodweb/persistent/pull/1178)
+  * Added 'withBaseBackend', 'withCompatible' to ease use of base/compatible backend queries in external code.
+* Added GHC 8.2.2 and GHC 8.4.4 back into the CI and `persistent` builds on 8.2.2 again [#1181](https://github.com/yesodweb/persistent/issues/1181)
+* [#1179](https://github.com/yesodweb/persistent/pull/1179)
+  * Added `Compatible`, a newtype for marking a backend as compatible with another. Use it with `DerivingVia` to derive simple instances based on backend compatibility.
+  * Added `makeCompatibleInstances` and `makeCompatibleKeyInstances`, TemplateHaskell invocations for auto-generating standalone derivations using `Compatible` and `DerivingVia`.
+* [#1207](https://github.com/yesodweb/persistent/pull/1207)
+    * @codygman discovered a bug in [issue #1199](https://github.com/yesodweb/persistent/issues/1199) where postgres connections were being returned to the `Pool SqlBackend` in an inconsistent state.
+      @parsonsmatt debugged the issue and determined that it had something to do with asynchronous exceptions.
+      Declaring it to be "out of his pay grade," he ripped the `poolToAcquire` function out and replaced it with `Data.Pool.withResource`, which doesn't exhibit the bug.
+      Fortunately, this doesn't affect the public API, and can be a mere bug release.
+    * Removed the functions `unsafeAcquireSqlConnFromPool`, `acquireASqlConnFromPool`, and `acquireSqlConnFromPoolWithIsolation`.
+      For a replacement, see `runSqlPoolNoTransaction` and `runSqlPoolWithHooks`.
+* Renaming values in persistent-template [#1203](https://github.com/yesodweb/persistent/pull/1203)
+* [#1214](https://github.com/yesodweb/persistent/pull/1214):
+    * Absorbed the `persistent-template` package. `persistent-template` will receive a 2.12 release with a warning and a deprecation notice.
+    * Remove the `nooverlap` flag. It wasn't being used anymore.
+* [#1205](https://github.com/yesodweb/persistent/pull/1205)
+    * Introduce the `PersistLiteral_` constructor, replacing the `PersistLiteral`, `PersistLiteralEscaped`, and `PersistDbSpecific`.
+    * The old constructors are now pattern synonyms. They don't actually differentiate between the various escaping strategies when consuming them! If you pattern match on multiple of `PersistDbSpecific`, `PersistLiteral`, or `PersistLiteralEscaped` , then you should use the `PersistLiteral_` constructor to differentiate between them.
+
+## 2.11.0.2
 * Fix a bug where an empty entity definition would break parsing of `EntityDef`s. [#1176](https://github.com/yesodweb/persistent/issues/1176)
 
 ## 2.11.0.1
@@ -61,7 +271,7 @@
 * [#1142](https://github.com/yesodweb/persistent/pull/1142)
     * Deprecate `hasCompositeKey` in favor of `hasCustomPrimaryKey` and `hasCompositePrimaryKey` functions.
 * [#1098](https://github.com/yesodweb/persistent/pull/1098)
-  * Add support for configuring the number of stripes and idle timeout for connection pools 
+  * Add support for configuring the number of stripes and idle timeout for connection pools
     * For functions that do not specify an idle timeout, the default has been bumped to 600 seconds.
       * This change is based off the experience of two production codebases. See [#775](https://github.com/yesodweb/persistent/issues/775)
     * Add a new type `ConnectionPoolConfig` to configure the number of connections in a pool, their idle timeout, and stripe size.
@@ -95,7 +305,7 @@
 ## 2.10.5.1
 
 * [#1024](https://github.com/yesodweb/persistent/pull/1024)
-    * Add the ability to do documentation comments in entity definition syntax. Unfortunately, TemplateHaskell cannot add documentation comments, so this can't be used to add Haddocks to entities. 
+    * Add the ability to do documentation comments in entity definition syntax. Unfortunately, TemplateHaskell cannot add documentation comments, so this can't be used to add Haddocks to entities.
     * Add Haddock explainers for some of the supported entity syntax in `Database.Persist.Quasi`
 
 ## 2.10.5

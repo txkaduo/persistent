@@ -8,6 +8,8 @@ import Data.Proxy
 import qualified Data.List as List
 import Init
 
+import Database.Persist.EntityDef.Internal (entityExtra)
+
 -- mpsGeneric = False is due to a bug or at least lack of a feature in mkKeyTypeDec TH.hs
 share [mkPersist persistSettings { mpsGeneric = False }, mkMigrate "compositeMigrate"] [persistLowerCase|
 SimpleCascadeChild
@@ -198,13 +200,13 @@ specsWith runDb = describe "foreign keys options" $ do
         let ed =
                 entityDef (Proxy @SimpleCascadeChild)
             isRefCol =
-                (HaskellName "ref" ==) . fieldHaskell
+                (FieldNameHS "ref" ==) . fieldHaskell
             expected = FieldCascade
                 { fcOnUpdate = Nothing
                 , fcOnDelete = Just Cascade
                 }
             Just refField =
-                List.find isRefCol (entityFields ed)
+                List.find isRefCol (getEntityFields ed)
 
         it "parses into fieldCascade"  $ do
             fieldCascade refField `shouldBe` expected

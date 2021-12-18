@@ -1,3 +1,12 @@
+## 2.13.0.0
+
+* [#1123](https://github.com/yesodweb/persistent/pull/1223):
+    * Changed the error message from trying to serialize a `PersistDbSpecific` value into `PersistLiteral_`.
+
+## 2.12.0.0
+
+* Decomposed `HaskellName` into `ConstraintNameHS`, `EntityNameHS`, `FieldNameHS`. Decomposed `DBName` into `ConstraintNameDB`, `EntityNameDB`, `FieldNameDB` respectively. [#1174](https://github.com/yesodweb/persistent/pull/1174)
+
 # 2.5.2.5
 
 * Remove unnecessary deriving of Typeable [#1114](https://github.com/yesodweb/persistent/pull/1114)

@@ -1,15 +1,15 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
 
 module Database.Persist.Class.PersistEntity
     ( PersistEntity (..)
@@ -32,14 +32,23 @@ module Database.Persist.Class.PersistEntity
     , SymbolToField (..)
     ) where
 
-import Data.Aeson (ToJSON (..), withObject, FromJSON (..), fromJSON, object, (.:), (.=), Value (Object))
+import Data.Aeson
+       ( FromJSON(..)
+       , ToJSON(..)
+       , Value(Object)
+       , fromJSON
+       , object
+       , withObject
+       , (.:)
+       , (.=)
+       )
 import qualified Data.Aeson.Parser as AP
-import Data.Aeson.Types (Parser,Result(Error,Success))
 import Data.Aeson.Text (encodeToTextBuilder)
+import Data.Aeson.Types (Parser, Result(Error, Success))
 import Data.Attoparsec.ByteString (parseOnly)
 import qualified Data.HashMap.Strict as HM
+import Data.List.NonEmpty (NonEmpty(..))
 import Data.Maybe (isJust)
-import Data.Monoid (mappend)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -48,8 +57,10 @@ import qualified Data.Text.Lazy.Builder as TB
 import GHC.Generics
 import GHC.OverloadedLabels
 import GHC.TypeLits
+import Data.Kind (Type)
 
 import Database.Persist.Class.PersistField
+import Database.Persist.Names
 import Database.Persist.Types.Base
 
 -- | Persistent serialized Haskell records to the database.
@@ -91,7 +102,7 @@ class ( PersistField (Key record), ToJSON (Key record), FromJSON (Key record)
     -- As of @persistent-2.11.0.0@, it's possible to use the @OverloadedLabels@
     -- language extension to refer to 'EntityField' values polymorphically. See
     -- the documentation on 'SymbolToField' for more information.
-    data EntityField record :: * -> *
+    data EntityField record :: Type -> Type
     -- | Return meta-data for a given 'EntityField'.
     persistFieldDef :: EntityField record typ -> FieldDef
     -- | A meta-operation to get the database fields of a record.
@@ -104,7 +115,7 @@ class ( PersistField (Key record), ToJSON (Key record), FromJSON (Key record)
     -- | A meta operation to retrieve all the 'Unique' keys.
     persistUniqueKeys :: record -> [Unique record]
     -- | A lower level operation.
-    persistUniqueToFieldNames :: Unique record -> [(HaskellName, DBName)]
+    persistUniqueToFieldNames :: Unique record -> NonEmpty (FieldNameHS, FieldNameDB)
     -- | A lower level operation.
     persistUniqueToValues :: Unique record -> [PersistValue]
 
@@ -128,7 +139,7 @@ type family BackendSpecificUpdate backend record
 recordName
     :: (PersistEntity record)
     => record -> Text
-recordName = unHaskellName . entityHaskell . entityDef . Just
+recordName = unEntityNameHS . entityHaskell . entityDef . Just
 
 -- | Updating a database entity.
 --
@@ -306,7 +317,7 @@ instance (PersistEntity record, PersistField record, PersistField (Key record))
         _ -> error $ T.unpack $ errMsg "expected PersistMap"
 
     fromPersistValue (PersistMap alist) = case after of
-        [] -> Left $ errMsg $ "did not find " `Data.Monoid.mappend` idField `mappend` " field"
+        [] -> Left $ errMsg $ "did not find " `mappend` idField `mappend` " field"
         ("_id", kv):afterRest ->
             fromPersistValue (PersistMap (before ++ afterRest)) >>= \record ->
                 keyFromValues [kv] >>= \k ->

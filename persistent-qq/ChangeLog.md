@@ -1,5 +1,14 @@
 # Changelog for persistent-qq
 
+## 2.12.0.1
+
+* Support GHC 9. [#1265](https://github.com/yesodweb/persistent/pull/1265)
+* Clarify lower bounds on `persistent` for the test suite. [#1274](https://github.com/yesodweb/persistent/pull/1274)
+
+## 2.12.0.0
+
+* Decomposed `HaskellName` into `ConstraintNameHS`, `EntityNameHS`, `FieldNameHS`. Decomposed `DBName` into `ConstraintNameDB`, `EntityNameDB`, `FieldNameDB` respectively. [#1174](https://github.com/yesodweb/persistent/pull/1174)
+
 ## 2.9.2.1
 
 * Support `persistent-2.11` in the test suite [#1170](https://github.com/yesodweb/persistent/pull/1170)
