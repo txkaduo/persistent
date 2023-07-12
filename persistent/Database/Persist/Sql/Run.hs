@@ -5,7 +5,8 @@ module Database.Persist.Sql.Run where
 
 import Control.Monad.IO.Unlift
 import Control.Monad.Logger.CallStack
-import Control.Monad.Reader (MonadReader, void)
+import Control.Monad (void)
+import Control.Monad.Reader (MonadReader)
 import qualified Control.Monad.Reader as MonadReader
 import Control.Monad.Trans.Reader hiding (local)
 import Control.Monad.Trans.Resource
@@ -157,7 +158,7 @@ rawAcquireSqlConn isolation = do
 -- Upon an exception the transaction is rolled back and the connection
 -- destroyed.
 --
--- This is equivalent to 'runSqlConn but does not incur the 'MonadUnliftIO'
+-- This is equivalent to 'runSqlConn' but does not incur the 'MonadUnliftIO'
 -- constraint, meaning it can be used within, for example, a 'Conduit'
 -- pipeline.
 --

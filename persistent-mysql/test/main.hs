@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -40,10 +41,12 @@ import qualified MaybeFieldDefsTest
 import qualified MigrationColumnLengthTest
 import qualified MigrationIdempotencyTest
 import qualified MigrationOnlyTest
+import qualified MigrationTest
 import qualified MpsCustomPrefixTest
 import qualified MpsNoPrefixTest
 import qualified PersistUniqueTest
 import qualified PersistentTest
+import qualified TypeLitFieldDefsTest
 -- FIXME: Not used... should it be?
 -- import qualified PrimaryTest
 import qualified RawSqlTest
@@ -127,6 +130,7 @@ main = do
             , UniqueTest.uniqueMigrate
             , MaxLenTest.maxlenMigrate
             , MaybeFieldDefsTest.maybeFieldDefMigrate
+            , TypeLitFieldDefsTest.typeLitFieldDefsMigrate
             , Recursive.recursiveMigrate
             , CompositeTest.compositeMigrate
             , PersistUniqueTest.migration
@@ -134,6 +138,7 @@ main = do
             , CustomPersistFieldTest.customFieldMigrate
             , InsertDuplicateUpdate.duplicateMigrate
             , MigrationIdempotencyTest.migration
+            , MigrationTest.migrationMigrate
             , CustomPrimaryKeyReferenceTest.migration
             , MigrationColumnLengthTest.migration
             , TransactionLevelTest.migration
@@ -175,6 +180,7 @@ main = do
         LargeNumberTest.specsWith db
         UniqueTest.specsWith db
         MaybeFieldDefsTest.specsWith db
+        TypeLitFieldDefsTest.specsWith db
         MaxLenTest.specsWith db
         Recursive.specsWith db
         SumTypeTest.specsWith db (Just (runMigrationSilent SumTypeTest.sumTypeMigrate))
@@ -208,6 +214,7 @@ main = do
         TransactionLevelTest.specsWith db
 
         MigrationIdempotencyTest.specsWith db
+        MigrationTest.specsWith db
         CustomConstraintTest.specs db
         -- TODO: implement automatic truncation for too long foreign keys, so we can run this test.
         xdescribe "The migration for this test currently fails because of MySQL's 64 character limit for identifiers. See https://github.com/yesodweb/persistent/issues/1000 for details" $

@@ -52,6 +52,7 @@ module Database.Persist.Class
     , getEntity
     , belongsTo
     , belongsToJust
+    , SafeToInsert
     , insertEntity
     , insertRecord
 
@@ -129,12 +130,9 @@ module Database.Persist.Class
     , selectSource
     , selectKeysList
 
-    -- * DeleteCascade
-    , DeleteCascade (..)
-    , deleteCascadeWhere
-
     -- * PersistEntity
     , PersistEntity (..)
+    , tabulateEntity
     , SymbolToField (..)
     -- * PersistField
     , PersistField (..)
@@ -163,7 +161,6 @@ module Database.Persist.Class
     , toPersistValueJSON, fromPersistValueJSON
     ) where
 
-import Database.Persist.Class.DeleteCascade
 import Database.Persist.Class.PersistConfig
 import Database.Persist.Class.PersistEntity
 import Database.Persist.Class.PersistField

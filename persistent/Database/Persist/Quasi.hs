@@ -667,6 +667,8 @@ import Employment as Import
 
 === Entity-level
 
+NOTE: This feature is deprecated as of version 2.14 and will be removed in 2.15 (unless there are many complaints).
+
 The
 <https://github.com/yesodweb/persistent/blob/master/persistent-test/src/SumTypeTest.hs#L35 tests for this feature>
 demonstrate their usage. Note the use of the sign @+@ in front of the entity
@@ -939,9 +941,16 @@ setPsToFKName setter ps = ps { psToFKName = setter }
 -- between the entity name and the constraint name when
 -- creating a foreign key constraint name
 --
+-- @since 2.14.2.0
+setPsUseSnakeCaseForeignKeys :: PersistSettings -> PersistSettings
+setPsUseSnakeCaseForeignKeys = setPsToFKName (toFKNameInfixed "_")
+
+-- Equivalent to 'setPsUseSnakeCaseForeignKeys', but misspelled.
+--
 -- @since 2.13.0.0
 setPsUseSnakeCaseForiegnKeys :: PersistSettings -> PersistSettings
-setPsUseSnakeCaseForiegnKeys = setPsToFKName (toFKNameInfixed "_")
+setPsUseSnakeCaseForiegnKeys = setPsUseSnakeCaseForeignKeys
+{-# DEPRECATED setPsUseSnakeCaseForiegnKeys "use the correctly spelled, equivalent, setPsUseSnakeCaseForeignKeys instead" #-}
 
 -- | Retrieve whether or not the 'PersistSettings' will generate code with
 -- strict fields.

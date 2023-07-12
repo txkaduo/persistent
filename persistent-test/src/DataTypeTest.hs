@@ -20,6 +20,7 @@ import Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
 import Test.QuickCheck.Gen (Gen(..))
 import Test.QuickCheck.Instances ()
 import Test.QuickCheck.Random (newQCGen)
+import Database.Persist.Class.PersistEntity
 
 import Database.Persist.TH
 import Init
@@ -49,7 +50,7 @@ cleanDB'
 cleanDB' = deleteWhere ([] :: [Filter (DataTypeTableGeneric backend)])
 
 roundFn :: RealFrac a => a -> Integer
-roundFn = round
+roundFn = truncate
 
 roundTime :: TimeOfDay -> TimeOfDay
 roundTime t = timeToTimeOfDay $ fromIntegral $ roundFn $ timeOfDayToTime t
@@ -91,6 +92,7 @@ specsWith
     , PersistQueryWrite backend
     , MonadFail m
     , MonadIO m
+    , SafeToInsert entity
     )
     => (db () -> IO ())
     -- ^ DB Runner

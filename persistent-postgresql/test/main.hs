@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -57,6 +58,7 @@ import qualified RenameTest
 import qualified SumTypeTest
 import qualified TransactionLevelTest
 import qualified TreeTest
+import qualified TypeLitFieldDefsTest
 import qualified UniqueTest
 import qualified UpsertTest
 import qualified UpsertWhere
@@ -120,6 +122,7 @@ main = do
       , UniqueTest.uniqueMigrate
       , MaxLenTest.maxlenMigrate
       , MaybeFieldDefsTest.maybeFieldDefMigrate
+      , TypeLitFieldDefsTest.typeLitFieldDefsMigrate
       , Recursive.recursiveMigrate
       , CompositeTest.compositeMigrate
       , TreeTest.treeMigrate
@@ -173,6 +176,7 @@ main = do
       UniqueTest.specsWith runConnAssert
       MaxLenTest.specsWith runConnAssert
       MaybeFieldDefsTest.specsWith runConnAssert
+      TypeLitFieldDefsTest.specsWith runConnAssert
       Recursive.specsWith runConnAssert
       SumTypeTest.specsWith runConnAssert (Just (runMigrationSilent SumTypeTest.sumTypeMigrate))
       MigrationTest.specsWith runConnAssert

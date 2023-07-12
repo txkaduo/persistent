@@ -2,6 +2,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TypeFamilies #-}
 
+import Control.Monad (when)
 import Control.Monad.Logger (LoggingT, runLoggingT)
 import Control.Monad.Trans.Resource
 import Control.Monad.Reader
@@ -13,11 +14,13 @@ import System.Log.FastLogger (fromLogStr)
 import Test.Hspec
 import Test.HUnit ((@?=))
 
+import Database.Persist.Class.PersistEntity
 import Database.Persist.Sql
 import Database.Persist.Sql.Raw.QQ
 import Database.Persist.Sqlite
 import PersistTestPetType
 import PersistentTestModels
+import qualified CodeGenTest
 
 main :: IO ()
 main = hspec spec
@@ -39,6 +42,7 @@ db actions = do
 
 spec :: Spec
 spec = describe "persistent-qq" $ do
+    CodeGenTest.spec db
     it "sqlQQ/?-?" $ db $ do
         ret <- [sqlQQ| SELECT #{2 :: Int}+#{2 :: Int} |]
         liftIO $ ret @?= [Single (4::Int)]
@@ -57,6 +61,7 @@ spec = describe "persistent-qq" $ do
               => PersistEntity val
               => PersistEntityBackend val ~ BaseBackend backend
               => MonadIO m
+              => SafeToInsert val
               => val
               -> ReaderT backend m (Key val, val)
             insert' v = insert v >>= \k -> return (k, v)
@@ -111,7 +116,7 @@ spec = describe "persistent-qq" $ do
         liftIO $ ret2 @?= [Entity (RFOKey $ unPersonKey p1k) (RFO p1)]
 
     it "sqlQQ/OUTER JOIN" $ db $ do
-        let insert' :: (PersistStore backend, PersistEntity val, PersistEntityBackend val ~ BaseBackend backend, MonadIO m)
+        let insert' :: (PersistStore backend, PersistEntity val, PersistEntityBackend val ~ BaseBackend backend, MonadIO m, SafeToInsert val)
                     => val -> ReaderT backend m (Key val, val)
             insert' v = insert v >>= \k -> return (k, v)
         (p1k, p1) <- insert' $ Person "Mathias"   23 Nothing
@@ -130,7 +135,7 @@ spec = describe "persistent-qq" $ do
                          , (Entity p2k p2, Nothing) ]
 
     it "sqlQQ/values syntax" $ db $ do
-        let insert' :: (PersistStore backend, PersistEntity val, PersistEntityBackend val ~ BaseBackend backend, MonadIO m)
+        let insert' :: (PersistStore backend, PersistEntity val, PersistEntityBackend val ~ BaseBackend backend, MonadIO m, SafeToInsert val)
                     => val -> ReaderT backend m (Key val, val)
             insert' v = insert v >>= \k -> return (k, v)
         (p1k, p1) <- insert' $ Person "Mathias"   23 (Just "red")

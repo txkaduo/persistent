@@ -1,6 +1,8 @@
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# language PatternSynonyms #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
@@ -14,13 +16,14 @@
 
 module Database.Persist.Class.PersistEntity
     ( PersistEntity (..)
+    , tabulateEntity
     , Update (..)
     , BackendSpecificUpdate
     , SelectOpt (..)
     , Filter (..)
     , FilterValue (..)
     , BackendSpecificFilter
-    , Entity (..)
+    , Entity (.., Entity, entityKey, entityVal)
 
     , recordName
     , entityValues
@@ -31,7 +34,12 @@ module Database.Persist.Class.PersistEntity
     , toPersistValueEnum, fromPersistValueEnum
       -- * Support for @OverloadedLabels@ with 'EntityField'
     , SymbolToField (..)
+    , -- * Safety check for inserts
+      SafeToInsert
+    , SafeToInsertErrorMessage
     ) where
+
+import Data.Functor.Constant
 
 import Data.Aeson
        ( FromJSON(..)
@@ -47,6 +55,7 @@ import qualified Data.Aeson.Parser as AP
 import Data.Aeson.Text (encodeToTextBuilder)
 import Data.Aeson.Types (Parser, Result(Error, Success))
 import Data.Attoparsec.ByteString (parseOnly)
+import Data.Functor.Identity
 
 #if MIN_VERSION_aeson(2,0,0)
 import qualified Data.Aeson.KeyMap as AM
@@ -54,6 +63,7 @@ import qualified Data.Aeson.KeyMap as AM
 import qualified Data.HashMap.Strict as AM
 #endif
 
+import GHC.Records
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Maybe (isJust)
 import Data.Text (Text)
@@ -113,9 +123,40 @@ class ( PersistField (Key record), ToJSON (Key record), FromJSON (Key record)
     -- | Return meta-data for a given 'EntityField'.
     persistFieldDef :: EntityField record typ -> FieldDef
     -- | A meta-operation to get the database fields of a record.
-    toPersistFields :: record -> [SomePersistField]
+    toPersistFields :: record -> [PersistValue]
     -- | A lower-level operation to convert from database values to a Haskell record.
     fromPersistValues :: [PersistValue] -> Either Text record
+
+    -- | This function allows you to build an @'Entity' a@ by specifying an
+    -- action that returns a value for the field in the callback function.
+    -- Let's look at an example.
+    --
+    -- @
+    -- parseFromEnvironmentVariables :: IO (Entity User)
+    -- parseFromEnvironmentVariables =
+    --     tabulateEntityA $ \\userField ->
+    --         case userField of
+    --             UserName ->
+    --                 getEnv "USER_NAME"
+    --             UserAge -> do
+    --                 ageVar <- getEnv "USER_AGE"
+    --                 case readMaybe ageVar of
+    --                     Just age ->
+    --                         pure age
+    --                     Nothing ->
+    --                         error $ "Failed to parse Age from: " <> ageVar
+    --             UserAddressId -> do
+    --                 addressVar <- getEnv "USER_ADDRESS_ID"
+    --                 pure $ AddressKey addressVar
+    -- @
+    --
+    -- @since 2.14.0.0
+    tabulateEntityA
+        :: Applicative f
+        => (forall a. EntityField record a -> f a)
+        -- ^ A function that builds a fragment of a record in an
+        -- 'Applicative' context.
+        -> f (Entity record)
 
     -- | Unique keys besides the 'Key'.
     data Unique record
@@ -138,6 +179,45 @@ class ( PersistField (Key record), ToJSON (Key record), FromJSON (Key record)
     -- @since 2.11.0.0
     keyFromRecordM :: Maybe (record -> Key record)
     keyFromRecordM = Nothing
+
+-- | Construct an @'Entity' record@ by providing a value for each of the
+-- record's fields.
+--
+-- These constructions are equivalent:
+--
+-- @
+-- entityMattConstructor, entityMattTabulate :: Entity User
+-- entityMattConstructor =
+--     Entity
+--         { entityKey = toSqlKey 123
+--         , entityVal =
+--             User
+--                 { userName = "Matt"
+--                 , userAge = 33
+--                 }
+--         }
+--
+-- entityMattTabulate =
+--     tabulateEntity $ \\case
+--         UserId ->
+--             toSqlKey 123
+--         UserName ->
+--             "Matt"
+--         UserAge ->
+--             33
+-- @
+--
+-- This is a specialization of 'tabulateEntityA', which allows you to
+-- construct an 'Entity' by providing an 'Applicative' action for each
+-- field instead of a regular function.
+--
+-- @since 2.14.0.0
+tabulateEntity
+    :: PersistEntity record
+    => (forall a. EntityField record a -> a)
+    -> Entity record
+tabulateEntity fromField =
+    runIdentity (tabulateEntityA (Identity . fromField))
 
 type family BackendSpecificUpdate backend record
 
@@ -221,8 +301,8 @@ data FilterValue typ where
 -- migration code -- @persistent@ will expect the column to be in
 -- the middle, but your DBMS will put it as the last column).
 -- So, instead of using a query like the one above, you may use
--- 'Database.Persist.GenericSql.rawSql' (from the
--- "Database.Persist.GenericSql" module) with its /entity
+-- 'Database.Persist.Sql.rawSql' (from the
+-- "Database.Persist.Sql" module) with its /entity
 -- selection placeholder/ (a double question mark @??@).  Using
 -- @rawSql@ the query above must be written as @SELECT ??  WHERE
 -- ..@.  Then @rawSql@ will replace @??@ with the list of all
@@ -231,8 +311,10 @@ data FilterValue typ where
 -- Entity backend b)@), then you must you use @SELECT ??, ??
 -- WHERE ...@, and so on.
 data Entity record =
-    Entity { entityKey :: Key record
-           , entityVal :: record }
+    Entity
+        { entityKey :: Key record
+        , entityVal :: record
+        }
 
 deriving instance (Generic (Key record), Generic record) => Generic (Entity record)
 deriving instance (Eq (Key record), Eq record) => Eq (Entity record)
@@ -456,3 +538,37 @@ class SymbolToField (sym :: Symbol) rec typ | sym rec -> typ where
 -- @since 2.11.0.0
 instance SymbolToField sym rec typ => IsLabel sym (EntityField rec typ) where
     fromLabel = symbolToField @sym
+
+-- | A type class which is used to witness that a type is safe to insert into
+-- the database without providing a primary key.
+--
+-- The @TemplateHaskell@ function 'mkPersist' will generate instances of this
+-- class for any entity that it works on. If the entity has a default primary
+-- key, then it provides a regular instance. If the entity has a @Primary@
+-- natural key, then this works fine. But if the entity has an @Id@ column with
+-- no @default=@, then this does a 'TypeError' and forces the user to use
+-- 'insertKey'.
+--
+-- @since 2.14.0.0
+class SafeToInsert a where
+
+type SafeToInsertErrorMessage a
+    = 'Text "The PersistEntity " ':<>: ShowType a ':<>: 'Text " does not have a default primary key."
+    ':$$: 'Text "This means that 'insert' will fail with a database error."
+    ':$$: 'Text "Please  provide a default= clause inthe entity definition,"
+    ':$$: 'Text "or use 'insertKey' instead to provide one."
+
+instance (TypeError (FunctionErrorMessage a b)) => SafeToInsert (a -> b)
+
+type FunctionErrorMessage a b =
+    'Text "Uh oh! It looks like you are trying to insert a function into the database."
+    ':$$: 'Text "Argument: " ':<>: 'ShowType a
+    ':$$: 'Text "Result:   " ':<>: 'ShowType b
+    ':$$: 'Text "You probably need to add more arguments to an Entity construction."
+
+type EntityErrorMessage a =
+    'Text "It looks like you're trying to `insert` an `Entity " ':<>: 'ShowType a ':<>: 'Text "` directly."
+    ':$$: 'Text "You want `insertKey` instead. As an example:"
+    ':$$: 'Text "    insertKey (entityKey ent) (entityVal ent)"
+
+instance TypeError (EntityErrorMessage a) => SafeToInsert (Entity a)

@@ -1,5 +1,28 @@
 # Changelog for persistent-postgresql
 
+## 2.13.5.2
+
+* [#1471](https://github.com/yesodweb/persistent/pull/1471)
+   * Explicitly import `Control.Monad.Trans.lift` to support mtl-2.3.
+
+## 2.13.5.1
+
+* [#1459](https://github.com/yesodweb/persistent/pull/1459)
+    * Make use of `CautiousMigration` type alias for clarity.
+
+## 2.13.5.0
+
+* [#1362](https://github.com/yesodweb/persistent/pull/1362/)
+    * Define `withPostgresqlPoolModifiedWithVersion`
+
+## 2.13.4.1
+
+* [#1367](https://github.com/yesodweb/persistent/pull/1367),
+  [#1366](https://github.com/yesodweb/persistent/pull/1367),
+  [#1338](https://github.com/yesodweb/persistent/pull/1338),
+  [#1335](https://github.com/yesodweb/persistent/pull/1335)
+    * Support GHC 9.2
+
 ## 2.13.4.0
 
 * [#1341](https://github.com/yesodweb/persistent/pull/1341)

@@ -288,11 +288,11 @@ data FieldAttr
     --     newName Text
     -- @
     | FieldAttrNoreference
-    -- ^ This attribute indicates that we should create a foreign key reference
-    -- from a column. By default, @persistent@ will try and create a foreign key
-    -- reference for a column if it can determine that the type of the column is
-    -- a @'Key' entity@ or an @EntityId@  and the @Entity@'s name was present in
-    -- 'mkPersist'.
+    -- ^ This attribute indicates that we should not create a foreign key
+    -- reference from a column. By default, @persistent@ will try and create a
+    -- foreign key reference for a column if it can determine that the type of
+    -- the column is a @'Key' entity@ or an @EntityId@  and the @Entity@'s name
+    -- was present in 'mkPersist'.
     --
     -- This is useful if you want to use the explicit foreign key syntax.
     --
@@ -411,9 +411,15 @@ parseFieldAttrs = fmap $ \case
 data FieldType
     = FTTypeCon (Maybe Text) Text
     -- ^ Optional module and name.
+    | FTLit FieldTypeLit
     | FTTypePromoted Text
     | FTApp FieldType FieldType
     | FTList FieldType
+    deriving (Show, Eq, Read, Ord, Lift)
+
+data FieldTypeLit
+    = IntTypeLit Integer
+    | TextTypeLit Text
     deriving (Show, Eq, Read, Ord, Lift)
 
 isFieldNotGenerated :: FieldDef -> Bool
@@ -429,7 +435,6 @@ data ReferenceDef
     -- ^ A ForeignRef has a late binding to the EntityDef it references via name
     -- and has the Haskell type of the foreign key in the form of FieldType
     | EmbedRef EntityNameHS
-    | CompositeRef CompositeDef
     | SelfReference
     -- ^ A SelfReference stops an immediate cycle which causes non-termination at compile-time (issue #311).
     deriving (Show, Eq, Read, Ord, Lift)
@@ -676,8 +681,7 @@ data FieldDef = FieldDef
     --
     -- @since 2.11.0
     , fieldComments  :: !(Maybe Text)
-    -- ^ Optional comments for a 'Field'. There is not currently a way to
-    -- attach comments to a field in the quasiquoter.
+    -- ^ Optional comments for a 'Field'.
     --
     -- @since 2.10.0
     , fieldGenerated :: !(Maybe Text)

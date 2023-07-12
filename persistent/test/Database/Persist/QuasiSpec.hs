@@ -7,6 +7,8 @@ module Database.Persist.QuasiSpec where
 
 import Prelude hiding (lines)
 
+import Control.Exception
+import Control.Monad
 import Data.List hiding (lines)
 import Data.List.NonEmpty (NonEmpty(..), (<|))
 import qualified Data.List.NonEmpty as NEL
@@ -23,28 +25,28 @@ import Text.Shakespeare.Text (st)
 
 spec :: Spec
 spec = describe "Quasi" $ do
-    describe "splitExtras" $ do
+    describe "parseEntityFields" $ do
         let helloWorldTokens = Token "hello" :| [Token "world"]
             foobarbazTokens = Token "foo" :| [Token "bar", Token "baz"]
         it "works" $ do
-            splitExtras []
+            parseEntityFields []
                 `shouldBe`
                     mempty
         it "works2" $ do
-            splitExtras
+            parseEntityFields
                 [ Line 0 helloWorldTokens
                 ]
                 `shouldBe`
                     ( [NEL.toList helloWorldTokens], mempty )
         it "works3" $ do
-            splitExtras
+            parseEntityFields
                 [ Line 0 helloWorldTokens
                 , Line 2 foobarbazTokens
                 ]
                 `shouldBe`
                     ( [NEL.toList helloWorldTokens, NEL.toList foobarbazTokens], mempty )
         it "works4" $ do
-            splitExtras
+            parseEntityFields
                 [ Line 0 [Token "Product"]
                 , Line 2 (Token <$> ["name", "Text"])
                 , Line 2 (Token <$> ["added", "UTCTime", "default=CURRENT_TIMESTAMP"])
@@ -59,7 +61,7 @@ spec = describe "Quasi" $ do
                         ) ]
                     )
         it "works5" $ do
-            splitExtras
+            parseEntityFields
                 [ Line 0 [Token "Product"]
                 , Line 2 (Token <$> ["name", "Text"])
                 , Line 4 [Token "ExtraBlock"]
@@ -81,6 +83,9 @@ spec = describe "Quasi" $ do
             subject ["asdf"]
                 `shouldBe`
                     Nothing
+        it "errors on invalid input" $ do
+            evaluate (subject ["name", "int"])
+              `shouldErrorWithMessage` "Invalid field type \"int\" PSFail \"int\""
         it "works if it has a name and a type" $ do
             subject ["asdf", "Int"]
                 `shouldBe`
@@ -135,6 +140,15 @@ spec = describe "Quasi" $ do
                         ]
                     )
 
+        it "handles numbers" $
+            parseLine "  one (Finite 1)" `shouldBe`
+                Just
+                    ( Line 2
+                        [ Token "one"
+                        , Token "Finite 1"
+                        ]
+                    )
+
         it "handles quotes" $
             parseLine "  \"foo bar\"  \"baz\"" `shouldBe`
                 Just
@@ -143,6 +157,11 @@ spec = describe "Quasi" $ do
                         , Token "baz"
                         ]
                     )
+
+        it "should error if quotes are unterminated" $ do
+            evaluate (parseLine "    \"foo bar")
+                `shouldErrorWithMessage`
+                    "Unterminated quoted string starting with foo bar"
 
         it "handles quotes mid-token" $
             parseLine "  x=\"foo bar\"  \"baz\"" `shouldBe`
@@ -215,6 +234,13 @@ spec = describe "Quasi" $ do
                     Just
                         ( Line 0
                             [ DocComment "this is a comment"
+                            ]
+                        )
+            it "recognizes empty line" $ do
+                parseLine "-- |" `shouldBe`
+                    Just
+                        ( Line 0
+                            [ DocComment ""
                             ]
                         )
 
@@ -339,8 +365,177 @@ Notification
             entityComments (unboundEntityDef car) `shouldBe` Just "This is a Car\n"
             entityComments (unboundEntityDef vehicle) `shouldBe` Nothing
 
-        describe "foreign keys" $ do
+        it "should error on malformed input, unterminated parens" $ do
             let definitions = [st|
+User
+    name Text
+    age  (Maybe Int
+|]
+            let [user] = parse lowerCaseSettings definitions
+            evaluate (unboundEntityDef user)
+                `shouldErrorWithMessage`
+                    "Unterminated parens string starting with Maybe Int"
+
+        it "errors on duplicate cascade update declarations" $ do
+            let definitions = [st|
+User
+    age  Int OnUpdateCascade OnUpdateCascade
+|]
+            let [user] = parse lowerCaseSettings definitions
+            mapM (evaluate . unboundFieldCascade) (unboundEntityFields user)
+                `shouldErrorWithMessage`
+                    "found more than one OnUpdate action, tokens: [\"OnUpdateCascade\",\"OnUpdateCascade\"]"
+
+        it "errors on duplicate cascade delete declarations" $ do
+            let definitions = [st|
+User
+    age  Int OnDeleteCascade OnDeleteCascade
+|]
+            let [user] = parse lowerCaseSettings definitions
+            mapM (evaluate . unboundFieldCascade) (unboundEntityFields user)
+                `shouldErrorWithMessage`
+                    "found more than one OnDelete action, tokens: [\"OnDeleteCascade\",\"OnDeleteCascade\"]"
+
+        describe "custom Id column" $ do
+            it "parses custom Id column" $ do
+                let definitions = [st|
+User
+    Id   Text
+    name Text
+    age  Int
+|]
+                let [user] = parse lowerCaseSettings definitions
+                getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
+                entityDB (unboundEntityDef user) `shouldBe` EntityNameDB "user"
+                let idFields = NEL.toList (entitiesPrimary (unboundEntityDef user))
+                (fieldHaskell <$> idFields) `shouldBe` [FieldNameHS "Id"]
+                (fieldDB <$> idFields) `shouldBe` [FieldNameDB "id"]
+                (fieldType <$> idFields) `shouldBe` [FTTypeCon Nothing "Text"]
+                (unboundFieldNameHS <$> unboundEntityFields user) `shouldBe`
+                    [ FieldNameHS "name"
+                    , FieldNameHS "age"
+                    ]
+
+            it "errors on duplicate custom Id column" $ do
+                let definitions = [st|
+User
+    Id   Text
+    Id   Text
+    name Text
+    age  Int
+|]
+                let [user] = parse lowerCaseSettings definitions
+                    errMsg = [st|expected only one Id declaration per entity|]
+                evaluate (unboundEntityDef user) `shouldErrorWithMessage`
+                    (T.unpack errMsg)
+
+        describe "primary declaration" $ do
+            it "parses Primary declaration" $ do
+                let definitions = [st|
+User
+    ref Text
+    name Text
+    age  Int
+    Primary ref
+|]
+                let [user] = parse lowerCaseSettings definitions
+                getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
+                entityDB (unboundEntityDef user) `shouldBe` EntityNameDB "user"
+                let idFields = NEL.toList (entitiesPrimary (unboundEntityDef user))
+                (fieldHaskell <$> idFields) `shouldBe` [FieldNameHS "Id"]
+                (fieldDB <$> idFields) `shouldBe` [FieldNameDB "id"]
+                (fieldType <$> idFields) `shouldBe` [FTTypeCon Nothing "UserId"]
+                (unboundFieldNameHS <$> unboundEntityFields user) `shouldBe`
+                    [ FieldNameHS "ref"
+                    , FieldNameHS "name"
+                    , FieldNameHS "age"
+                    ]
+                entityUniques (unboundEntityDef user) `shouldBe`
+                    [ UniqueDef
+                        { uniqueHaskell =
+                            ConstraintNameHS "UserPrimaryKey"
+                        , uniqueDBName =
+                            ConstraintNameDB "primary_key"
+                        , uniqueFields =
+                            pure (FieldNameHS "ref", FieldNameDB "ref")
+                        , uniqueAttrs =
+                            []
+                        }
+                    ]
+
+            it "errors on duplicate custom Primary declaration" $ do
+                let definitions = [st|
+User
+    ref Text
+    name Text
+    age  Int
+    Primary ref
+    Primary name
+|]
+                let [user] = parse lowerCaseSettings definitions
+                    errMsg = "expected only one Primary declaration per entity"
+                evaluate (unboundEntityDef user) `shouldErrorWithMessage`
+                    errMsg
+
+            it "errors on conflicting Primary/Id declarations" $ do
+                let definitions = [st|
+User
+    Id Text
+    ref Text
+    name Text
+    age  Int
+    Primary ref
+|]
+                let [user] = parse lowerCaseSettings definitions
+                    errMsg = [st|Specified both an ID field and a Primary field|]
+                evaluate (unboundEntityDef user) `shouldErrorWithMessage`
+                    (T.unpack errMsg)
+
+            it "triggers error on invalid declaration" $ do
+                let definitions = [st|
+User
+    age Text
+    Primary ref
+|]
+                let [user] = parse lowerCaseSettings definitions
+                case unboundPrimarySpec user of
+                    NaturalKey ucd -> do
+                        evaluate (NEL.head $ unboundCompositeCols ucd) `shouldErrorWithMessage`
+                            "Unknown column in primary key constraint: \"ref\""
+                    _ ->
+                        error "Expected NaturalKey, failing"
+
+        describe "entity unique constraints" $ do
+            it "triggers error if declared field does not exist" $ do
+                let definitions = [st|
+User
+    name            Text
+    emailFirst      Text
+
+    UniqueEmail emailFirst emailSecond
+|]
+                let [user] = parse lowerCaseSettings definitions
+                    uniques = entityUniques (unboundEntityDef user)
+                    [dbNames] = fmap snd . uniqueFields <$> uniques
+                    errMsg = unwords
+                        [ "Unknown column in \"UniqueEmail\" constraint: \"emailSecond\""
+                        , "possible fields: [\"name\",\"emailFirst\"]"
+                        ]
+                evaluate (head (NEL.tail dbNames)) `shouldErrorWithMessage`
+                    errMsg
+
+            it "triggers error if no valid constraint name provided" $ do
+                let definitions = [st|
+User
+    age Text
+    Unique some
+|]
+                let [user] = parse lowerCaseSettings definitions
+                evaluate (unboundPrimarySpec user) `shouldErrorWithMessage`
+                    "invalid unique constraint on table[\"User\"] expecting an uppercase constraint name xs=[\"some\"]"
+
+        describe "foreign keys" $ do
+            let validDefinitions = [st|
 User
     name            Text
     emailFirst      Text
@@ -361,17 +556,116 @@ Notification
                     flippedFK (EntityNameHS entName) (ConstraintNameHS conName) =
                         conName <> entName
                     [_user, notification] =
-                        parse (setPsToFKName flippedFK lowerCaseSettings) definitions
+                        parse (setPsToFKName flippedFK lowerCaseSettings) validDefinitions
                     [notificationForeignDef] =
                         unboundForeignDef <$> unboundForeignDefs notification
                 foreignConstraintNameDBName notificationForeignDef
                     `shouldBe`
                         ConstraintNameDB "fk_noti_user_notification"
 
+            it "should error when insufficient params provided" $ do
+                let definitions = [st|
+User
+    name            Text
+    emailFirst      Text
+    emailSecond     Text
+
+    UniqueEmail emailFirst emailSecond
+
+Notification
+    content         Text
+    sentToFirst     Text
+    sentToSecond    Text
+    Foreign User
+|]
+                let [_user, notification] = parse (setPsUseSnakeCaseForiegnKeys lowerCaseSettings) definitions
+                mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
+                    `shouldErrorWithMessage`
+                        "invalid foreign key constraint on table[\"Notification\"] expecting a lower case constraint name or a cascading action xs=[]"
+
+            it "should error when foreign fields not provided" $ do
+                let definitions = [st|
+User
+    name            Text
+    emailFirst      Text
+    emailSecond     Text
+
+    UniqueEmail emailFirst emailSecond
+
+Notification
+    content         Text
+    sentToFirst     Text
+    sentToSecond    Text
+    Foreign User fk_noti_user
+|]
+                let [_user, notification] = parse (setPsUseSnakeCaseForiegnKeys lowerCaseSettings) definitions
+                mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
+                    `shouldErrorWithMessage`
+                        "No fields on foreign reference."
+
+            it "should error when number of parent and foreign fields differ" $ do
+                let definitions = [st|
+User
+    name            Text
+    emailFirst      Text
+    emailSecond     Text
+
+    UniqueEmail emailFirst emailSecond
+
+Notification
+    content         Text
+    sentToFirst     Text
+    sentToSecond    Text
+    Foreign User fk_noti_user sentToFirst sentToSecond References emailFirst
+|]
+                let [_user, notification] = parse (setPsUseSnakeCaseForiegnKeys lowerCaseSettings) definitions
+                mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
+                    `shouldErrorWithMessage`
+                        "invalid foreign key constraint on table[\"Notification\"] Found 2 foreign fields but 1 parent fields"
+
+            it "should throw error when there is more than one delete cascade on the declaration" $ do
+                let definitions = [st|
+User
+    name            Text
+    emailFirst      Text
+    emailSecond     Text
+
+    UniqueEmail emailFirst emailSecond
+
+Notification
+    content         Text
+    sentToFirst     Text
+    sentToSecond    Text
+    Foreign User OnDeleteCascade OnDeleteCascade
+|]
+                let [_user, notification] = parse (setPsUseSnakeCaseForiegnKeys lowerCaseSettings) definitions
+                mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
+                    `shouldErrorWithMessage`
+                        "invalid foreign key constraint on table[\"Notification\"] found more than one OnDelete actions"
+
+            it "should throw error when there is more than one update cascade on the declaration" $ do
+                let definitions = [st|
+User
+    name            Text
+    emailFirst      Text
+    emailSecond     Text
+
+    UniqueEmail emailFirst emailSecond
+
+Notification
+    content         Text
+    sentToFirst     Text
+    sentToSecond    Text
+    Foreign User OnUpdateCascade OnUpdateCascade
+|]
+                let [_user, notification] = parse (setPsUseSnakeCaseForiegnKeys lowerCaseSettings) definitions
+                mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
+                    `shouldErrorWithMessage`
+                        "invalid foreign key constraint on table[\"Notification\"] found more than one OnUpdate actions"
+
             it "should allow you to enable snake cased foriegn keys via a preset configuration function" $ do
-                let
-                    [_user, notification] =
-                        parse (setPsUseSnakeCaseForiegnKeys lowerCaseSettings) definitions
+                let [_user, notification] =
+                        parse (setPsUseSnakeCaseForiegnKeys lowerCaseSettings) validDefinitions
                     [notificationForeignDef] =
                         unboundForeignDef <$> unboundForeignDefs notification
                 foreignConstraintNameDBName notificationForeignDef
@@ -400,6 +694,22 @@ CustomerTransfer
                     , (FieldNameHS "uuid", FTTypeCon Nothing "TransferUuid")
                     ]
 
+        describe "type literals" $ do
+            it "should be able to parse type literals" $ do
+                let simplifyField field =
+                        (unboundFieldNameHS field, unboundFieldType field)
+                let tickedDefinition = [st|
+WithFinite
+    one    (Finite 1)
+    twenty (Labelled "twenty")
+|]
+                let [withFinite] = parse lowerCaseSettings tickedDefinition
+
+                (simplifyField <$> unboundEntityFields withFinite) `shouldBe`
+                    [ (FieldNameHS "one", FTApp (FTTypeCon Nothing "Finite") (FTLit (IntTypeLit 1)))
+                    , (FieldNameHS "twenty", FTApp (FTTypeCon Nothing "Labelled") (FTLit (TextTypeLit "twenty")))
+                    ]
+
     describe "parseFieldType" $ do
         it "simple types" $
             parseFieldType "FooBar" `shouldBe` Right (FTTypeCon Nothing "FooBar")
@@ -426,8 +736,24 @@ CustomerTransfer
                 baz = FTTypeCon Nothing "Baz"
             parseFieldType "Foo [Bar] Baz" `shouldBe` Right (
                 foo `FTApp` bars `FTApp` baz)
+        it "numeric type literals" $ do
+            let expected = FTApp (FTTypeCon Nothing "Finite") (FTLit (IntTypeLit 1))
+            parseFieldType "Finite 1" `shouldBe` Right expected
+        it "string type literals" $ do
+            let expected = FTApp (FTTypeCon Nothing "Labelled") (FTLit (TextTypeLit "twenty"))
+            parseFieldType "Labelled \"twenty\"" `shouldBe` Right expected
+        it "nested list / parens (list inside parens)" $ do
+            let maybeCon = FTTypeCon Nothing "Maybe"
+                int = FTTypeCon Nothing "Int"
+            parseFieldType "Maybe (Maybe [Int])" `shouldBe` Right
+                (maybeCon `FTApp` (maybeCon `FTApp` FTList int))
+        it "nested list / parens (parens inside list)" $ do
+            let maybeCon = FTTypeCon Nothing "Maybe"
+                int = FTTypeCon Nothing "Int"
+            parseFieldType "[Maybe (Maybe Int)]" `shouldBe` Right
+                (FTList (maybeCon `FTApp` (maybeCon `FTApp` int)))
         it "fails on lowercase starts" $ do
-            parseFieldType "nothanks" `shouldBe` Left "PSFail ('n',\"othanks\")"
+            parseFieldType "nothanks" `shouldBe` Left "PSFail \"nothanks\""
 
     describe "#1175 empty entity" $ do
         let subject =
@@ -899,3 +1225,12 @@ Baz
 arbitraryWhiteSpaceChar :: Gen Char
 arbitraryWhiteSpaceChar =
   oneof $ pure <$> [' ', '\t', '\n', '\r']
+
+shouldErrorWithMessage :: IO a -> String -> Expectation
+shouldErrorWithMessage action expectedMsg = do
+    res <- try action
+    case res of
+        Left (ErrorCall msg) ->
+            msg `shouldBe` expectedMsg
+        _ ->
+            expectationFailure "Expected `error` to have been called"

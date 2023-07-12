@@ -4,6 +4,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -24,7 +25,7 @@
 module Database.Persist.THSpec where
 
 import Control.Applicative (Const(..))
-import Data.Aeson hiding (Key)
+import Data.Aeson (decode, encode)
 import Data.ByteString.Lazy.Char8 ()
 import Data.Coerce
 import Data.Functor.Identity (Identity(..))
@@ -32,7 +33,9 @@ import Data.Int
 import qualified Data.List as List
 import Data.Proxy
 import Data.Text (Text, pack)
+import Data.Time
 import GHC.Generics (Generic)
+import System.Environment
 import Test.Hspec
 import Test.Hspec.QuickCheck
 import Test.QuickCheck.Arbitrary
@@ -46,7 +49,8 @@ import Database.Persist.TH
 import TemplateTestImports
 
 
-import qualified Database.Persist.TH.PersistWithSpec as PersistWithSpec
+import qualified Database.Persist.TH.CommentSpec as CommentSpec
+import qualified Database.Persist.TH.CompositeKeyStyleSpec as CompositeKeyStyleSpec
 import qualified Database.Persist.TH.DiscoverEntitiesSpec as DiscoverEntitiesSpec
 import qualified Database.Persist.TH.EmbedSpec as EmbedSpec
 import qualified Database.Persist.TH.ForeignRefSpec as ForeignRefSpec
@@ -56,11 +60,16 @@ import qualified Database.Persist.TH.KindEntitiesSpec as KindEntitiesSpec
 import qualified Database.Persist.TH.MaybeFieldDefsSpec as MaybeFieldDefsSpec
 import qualified Database.Persist.TH.MigrationOnlySpec as MigrationOnlySpec
 import qualified Database.Persist.TH.MultiBlockSpec as MultiBlockSpec
+import qualified Database.Persist.TH.NestedSymbolsInTypeSpec as NestedSymbolsInTypeSpec
+import qualified Database.Persist.TH.NoFieldSelectorsSpec as NoFieldSelectorsSpec
 import qualified Database.Persist.TH.OverloadedLabelSpec as OverloadedLabelSpec
+import qualified Database.Persist.TH.PersistWithSpec as PersistWithSpec
+import qualified Database.Persist.TH.RequireOnlyPersistImportSpec as RequireOnlyPersistImportSpec
 import qualified Database.Persist.TH.SharedPrimaryKeyImportedSpec as SharedPrimaryKeyImportedSpec
 import qualified Database.Persist.TH.SharedPrimaryKeySpec as SharedPrimaryKeySpec
+import qualified Database.Persist.TH.SumSpec as SumSpec
 import qualified Database.Persist.TH.ToFromPersistValuesSpec as ToFromPersistValuesSpec
-import qualified Database.Persist.TH.CommentSpec as CommentSpec
+import qualified Database.Persist.TH.TypeLitFieldDefsSpec as TypeLitFieldDefsSpec
 
 -- test to ensure we can have types ending in Id that don't trash the TH
 -- machinery
@@ -86,6 +95,11 @@ Address json
     deriving Show Eq
 NoJson
     foo Text
+    deriving Show Eq
+
+CustomIdName
+    Id      sql=id_col
+    name    Text
     deriving Show Eq
 |]
 
@@ -171,14 +185,18 @@ instance Arbitrary Address where
 
 spec :: Spec
 spec = describe "THSpec" $ do
+    describe "SumSpec" $ SumSpec.spec
     PersistWithSpec.spec
     KindEntitiesSpec.spec
+    NestedSymbolsInTypeSpec.spec
     OverloadedLabelSpec.spec
     SharedPrimaryKeySpec.spec
     SharedPrimaryKeyImportedSpec.spec
     ImplicitIdColSpec.spec
     MaybeFieldDefsSpec.spec
+    TypeLitFieldDefsSpec.spec
     MigrationOnlySpec.spec
+    NoFieldSelectorsSpec.spec
     EmbedSpec.spec
     DiscoverEntitiesSpec.spec
     MultiBlockSpec.spec
@@ -186,6 +204,7 @@ spec = describe "THSpec" $ do
     ToFromPersistValuesSpec.spec
     JsonEncodingSpec.spec
     CommentSpec.spec
+    CompositeKeyStyleSpec.spec
     describe "TestDefaultKeyCol" $ do
         let EntityIdField FieldDef{..} =
                 entityId (entityDef (Proxy @TestDefaultKeyCol))
@@ -421,6 +440,59 @@ spec = describe "THSpec" $ do
 
             show (CustomPrimaryKeyKey 0) `shouldBe` "CustomPrimaryKeyKey {unCustomPrimaryKeyKey = 0}"
             read (show (CustomPrimaryKeyKey 0)) `shouldBe` CustomPrimaryKeyKey 0
+
+    describe "tabulateEntityA" $ do
+        it "works" $ do
+            person <-
+                tabulateEntityA $ \case
+                    PersonName ->
+                        pure "Matt"
+                    PersonAge -> do
+                        (year, _, _) <- toGregorian . utctDay <$> getCurrentTime
+                        pure $ Just (fromInteger year - 1988)
+                    PersonFoo -> do
+                        _ <- lookupEnv "PERSON_FOO" :: IO (Maybe String)
+                        pure Bar
+                    PersonAddress ->
+                        pure $ Address  "lol no" "Denver" Nothing
+                    PersonId ->
+                        pure $ toSqlKey 123
+            expectedAge <- fromInteger . subtract 1988 . (\(a, _, _) -> a) . toGregorian . utctDay <$> getCurrentTime
+            person `shouldBe` Entity (toSqlKey 123) Person
+                { personName =
+                    "Matt"
+                , personAge =
+                    Just expectedAge
+                , personFoo =
+                    Bar
+                , personAddress =
+                    Address  "lol no" "Denver" Nothing
+                }
+
+    describe "tabulateEntity" $ do
+        it "works" $ do
+            let
+                addressTabulate =
+                    tabulateEntity $ \case
+                        AddressId ->
+                            toSqlKey 123
+                        AddressStreet ->
+                            "nope"
+                        AddressCity ->
+                            "Denver"
+                        AddressZip ->
+                            Nothing
+            addressTabulate `shouldBe`
+                Entity (toSqlKey 123) Address
+                    { addressStreet = "nope"
+                    , addressCity = "Denver"
+                    , addressZip = Nothing
+                    }
+
+    describe "CustomIdName" $ do
+        it "has a good safe to insert class instance" $ do
+            let proxy = Proxy :: SafeToInsert CustomIdName => Proxy CustomIdName
+            proxy `shouldBe` Proxy
 
 (&) :: a -> (a -> b) -> b
 x & f = f x

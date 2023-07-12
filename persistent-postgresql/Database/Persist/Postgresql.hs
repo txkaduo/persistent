@@ -26,9 +26,14 @@
 module Database.Persist.Postgresql
     ( withPostgresqlPool
     , withPostgresqlPoolWithVersion
+    , withPostgresqlPoolWithConf
+
+    , withPostgresqlPoolModified
+    , withPostgresqlPoolModifiedWithVersion
+
     , withPostgresqlConn
     , withPostgresqlConnWithVersion
-    , withPostgresqlPoolWithConf
+
     , createPostgresqlPool
     , createPostgresqlPoolModified
     , createPostgresqlPoolModifiedWithVersion
@@ -78,6 +83,7 @@ import Control.Monad.Except
 import Control.Monad.IO.Unlift (MonadIO(..), MonadUnliftIO)
 import Control.Monad.Logger (MonadLoggerIO, runNoLoggingT)
 import Control.Monad.Trans.Reader (ReaderT(..), asks, runReaderT)
+import Control.Monad.Trans.Class (lift)
 #if !MIN_VERSION_base(4,12,0)
 import Control.Monad.Trans.Reader (withReaderT)
 #endif
@@ -194,6 +200,34 @@ withPostgresqlPoolWithConf conf hooks = do
       modConn = pgConfHooksAfterCreate hooks
   let logFuncToBackend = open' modConn getVer id (pgConnStr conf)
   withSqlPoolWithConfig logFuncToBackend (postgresConfToConnectionPoolConfig conf)
+
+-- | Same as 'withPostgresqlPool', but with the 'createPostgresqlPoolModified'
+-- feature.
+--
+-- @since 2.13.5.0
+withPostgresqlPoolModified
+    :: (MonadUnliftIO m, MonadLoggerIO m)
+    => (PG.Connection -> IO ()) -- ^ Action to perform after connection is created.
+    -> ConnectionString -- ^ Connection string to the database.
+    -> Int -- ^ Number of connections to be kept open in the pool.
+    -> (Pool SqlBackend -> m t)
+    -> m t
+withPostgresqlPoolModified = withPostgresqlPoolModifiedWithVersion getServerVersion
+
+-- | Same as 'withPostgresqlPool', but with the
+-- 'createPostgresqlPoolModifiedWithVersion' feature.
+--
+-- @since 2.13.5.0
+withPostgresqlPoolModifiedWithVersion
+    :: (MonadUnliftIO m, MonadLoggerIO m)
+    => (PG.Connection -> IO (Maybe Double)) -- ^ Action to perform to get the server version.
+    -> (PG.Connection -> IO ()) -- ^ Action to perform after connection is created.
+    -> ConnectionString -- ^ Connection string to the database.
+    -> Int -- ^ Number of connections to be kept open in the pool.
+    -> (Pool SqlBackend -> m t)
+    -> m t
+withPostgresqlPoolModifiedWithVersion getVerDouble modConn ci = do
+  withSqlPool (open' modConn (oldGetVersionToNew getVerDouble) id ci)
 
 -- | Create a PostgreSQL connection pool.  Note that it's your
 -- responsibility to properly close the connection pool when
@@ -579,7 +613,7 @@ doesTableExist getter (EntityNameDB name) = do
 migrate' :: [EntityDef]
          -> (Text -> IO Statement)
          -> EntityDef
-         -> IO (Either [Text] [(Bool, Text)])
+         -> IO (Either [Text] CautiousMigration)
 migrate' allDefs getter entity = fmap (fmap $ map showAlterDb) $ do
     old <- getColumns getter entity newcols'
     case partitionEithers old of
